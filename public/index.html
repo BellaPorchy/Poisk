@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>ID Highlight — Панель управления</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <main class="container">
+    <h1>ID Highlight — Панель</h1>
+
+    <div class="controls">
+      <label>
+        API Key (если используется):
+        <input id="apiKey" placeholder="оставь пустым, если не задан" />
+      </label>
+
+      <label>
+        Добавить ID:
+        <input id="inputId" placeholder="введите ID" />
+        <button id="btnAdd">Добавить</button>
+      </label>
+
+      <label>
+        Добавить несколько (через запятую):
+        <input id="inputMany" placeholder="id1,id2,id3" />
+        <button id="btnAddMany">Добавить несколько</button>
+      </label>
+    </div>
+
+    <section>
+      <h2>Текущий список ID</h2>
+      <div id="listArea">Загрузка...</div>
+    </section>
+
+    <footer>
+      <small>API: <code>/api/highlight-list</code>, <code>/api/add-id</code>, <code>/api/remove-id</code></small>
+    </footer>
+  </main>
+
+  <script src="/panel.js"></script>
+</body>
+</html>

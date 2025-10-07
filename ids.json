@@ -1,3 +1,14 @@
 {
-  "ids": ["a4cdc237-2fc5-4104-b831-98833fde4bd6", "9adfca5b-6eae-4e98-b1f5-e2d5be6b4b02", "aeb54422-2ce1-4a34-9274-e7e0072a651c"]
+  "entries": [
+    {
+      "id": "2f393ce4-e376-4dca-a9ce-f2f4ffee5088",
+      "user": "Bolshe",
+      "addedAt": "2025-10-07T17:45:00.000Z"
+    },
+    {
+      "id": "7ba27480-7795-4546-92aa-9f4bb89e947e",
+      "user": "Bolshe",
+      "addedAt": "2025-10-07T18:01:22.000Z"
+    }
+  ]
 }

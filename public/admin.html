@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <title>🔐 Админ-панель API ключей</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #f0f6ff;
+      padding: 20px;
+    }
+    h1 {
+      text-align: center;
+      color: #004080;
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      margin-top: 20px;
+    }
+    th, td {
+      padding: 10px 12px;
+      border-bottom: 1px solid #ddd;
+      text-align: left;
+    }
+    th {
+      background: #0074d9;
+      color: white;
+    }
+    tr:hover {
+      background: #eef6ff;
+    }
+    #controls {
+      margin-top: 20px;
+      text-align: center;
+    }
+    input {
+      padding: 6px 8px;
+      margin: 0 5px;
+    }
+    button {
+      padding: 6px 12px;
+      background: #0074d9;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #005fa3;
+    }
+  </style>
+</head>
+<body>
+  <h1>🔐 Админ-панель ключей</h1>
+  <div id="controls">
+    <input type="password" id="adminKey" placeholder="Мастер-ключ">
+    <input type="text" id="newUser" placeholder="Имя пользователя">
+    <input type="text" id="newKey" placeholder="API ключ">
+    <button id="addBtn">➕ Добавить</button>
+    <button id="loadBtn">🔄 Обновить</button>
+  </div>
+  <table id="keysTable">
+    <thead>
+      <tr>
+        <th>Имя</th>
+        <th>Ключ</th>
+        <th>Действие</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <script>
+    const API = "/api/keys";
+
+    async function loadKeys() {
+      const key = document.getElementById("adminKey").value.trim();
+      if (!key) return alert("Введите мастер-ключ");
+      const res = await fetch(API, { headers: { "x-admin-key": key } });
+      const data = await res.json();
+
+      const tbody = document.querySelector("#keysTable tbody");
+      tbody.innerHTML = "";
+
+      if (data.keys) {
+        for (const { key: k, user } of data.keys) {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td>${user}</td>
+            <td><code>${k}</code></td>
+            <td><button onclick="deleteKey('${k}')">❌ Удалить</button></td>
+          `;
+          tbody.append(tr);
+        }
+      } else {
+        tbody.innerHTML = `<tr><td colspan="3">Ошибка: ${data.error}</td></tr>`;
+      }
+    }
+
+    async function addKey() {
+      const adminKey = document.getElementById("adminKey").value.trim();
+      const user = document.getElementById("newUser").value.trim();
+      const key = document.getElementById("newKey").value.trim();
+      if (!adminKey || !user || !key) return alert("Заполните все поля!");
+
+      await fetch(API, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-admin-key": adminKey,
+        },
+        body: JSON.stringify({ key, user }),
+      });
+      await loadKeys();
+    }
+
+    async function deleteKey(k) {
+      const adminKey = document.getElementById("adminKey").value.trim();
+      if (!adminKey) return alert("Введите мастер-ключ!");
+      await fetch(API + "/" + encodeURIComponent(k), {
+        method: "DELETE",
+        headers: { "x-admin-key": adminKey },
+      });
+      await loadKeys();
+    }
+
+    document.getElementById("addBtn").addEventListener("click", addKey);
+    document.getElementById("loadBtn").addEventListener("click", loadKeys);
+  </script>
+</body>
+</html>

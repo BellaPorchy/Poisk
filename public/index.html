@@ -1,44 +1,144 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="ru">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>ID Highlight — Панель управления</title>
-  <link rel="stylesheet" href="/style.css" />
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ID Highlight Panel</title>
+  <style>
+    body {
+      font-family: "Segoe UI", sans-serif;
+      background: #f5f9ff;
+      color: #333;
+      margin: 0;
+      padding: 20px;
+    }
+
+    h1 {
+      text-align: center;
+      color: #0055aa;
+      margin-bottom: 20px;
+    }
+
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      background: white;
+      border-radius: 10px;
+      overflow: hidden;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+
+    th, td {
+      padding: 12px 15px;
+      text-align: left;
+      border-bottom: 1px solid #e6e6e6;
+    }
+
+    th {
+      background-color: #0077cc;
+      color: white;
+    }
+
+    tr:hover {
+      background-color: #f0f8ff;
+    }
+
+    #status {
+      text-align: center;
+      margin-bottom: 15px;
+      font-size: 14px;
+      color: #666;
+    }
+
+    #refresh {
+      display: inline-block;
+      margin: 0 auto 20px;
+      padding: 8px 16px;
+      font-size: 14px;
+      background-color: #0077cc;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
+    #refresh:hover {
+      background-color: #005fa3;
+    }
+  </style>
 </head>
 <body>
-  <main class="container">
-    <h1>ID Highlight — Панель</h1>
+  <h1>📋 ID Highlight Panel</h1>
 
-    <div class="controls">
-      <label>
-        API Key (если используется):
-        <input id="apiKey" placeholder="оставь пустым, если не задан" />
-      </label>
+  <div id="status">Загрузка данных...</div>
+  <div style="text-align:center;">
+    <button id="refresh">🔄 Обновить</button>
+  </div>
 
-      <label>
-        Добавить ID:
-        <input id="inputId" placeholder="введите ID" />
-        <button id="btnAdd">Добавить</button>
-      </label>
+  <table id="idTable">
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Добавил</th>
+        <th>Дата и время</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
 
-      <label>
-        Добавить несколько (через запятую):
-        <input id="inputMany" placeholder="id1,id2,id3" />
-        <button id="btnAddMany">Добавить несколько</button>
-      </label>
-    </div>
+  <script>
+    const API_URL = "/api/highlight-list";
 
-    <section>
-      <h2>Текущий список ID</h2>
-      <div id="listArea">Загрузка...</div>
-    </section>
+    async function loadIDs() {
+      const status = document.getElementById("status");
+      const tbody = document.querySelector("#idTable tbody");
 
-    <footer>
-      <small>API: <code>/api/highlight-list</code>, <code>/api/add-id</code>, <code>/api/remove-id</code></small>
-    </footer>
-  </main>
+      status.textContent = "⏳ Обновление данных...";
+      try {
+        const res = await fetch(API_URL);
+        const data = await res.json();
 
-  <script src="/panel.js"></script>
+        tbody.innerHTML = "";
+
+        if (data.entries && data.entries.length > 0) {
+          const sorted = data.entries.sort(
+            (a, b) => new Date(b.addedAt) - new Date(a.addedAt)
+          );
+
+          for (const entry of sorted) {
+            const tr = document.createElement("tr");
+
+            const tdID = document.createElement("td");
+            tdID.textContent = entry.id;
+            tdID.style.fontFamily = "monospace";
+            tdID.style.fontSize = "14px";
+
+            const tdUser = document.createElement("td");
+            tdUser.textContent = entry.user || "—";
+
+            const tdDate = document.createElement("td");
+            const date = new Date(entry.addedAt);
+            tdDate.textContent = date.toLocaleString();
+
+            tr.append(tdID, tdUser, tdDate);
+            tbody.append(tr);
+          }
+
+          status.textContent = `✅ Загружено ${data.entries.length} записей`;
+        } else {
+          status.textContent = "Пока нет данных.";
+        }
+      } catch (err) {
+        console.error(err);
+        status.textContent = "⚠️ Ошибка загрузки данных с сервера.";
+      }
+    }
+
+    document.getElementById("refresh").addEventListener("click", loadIDs);
+
+    // Автообновление каждые 15 секунд
+    loadIDs();
+    setInterval(loadIDs, 5000);
+  </script>
 </body>
 </html>

@@ -1,292 +1,250 @@
-// ======================================================
-// 🧩 Импорт библиотек и инициализация окружения
-// ======================================================
 import express from "express";
-import bodyParser from "body-parser";
-import pkg from "pg";
 import cors from "cors";
-import multer from "multer";
 import fs from "fs";
+import pkg from "pg";
+import multer from "multer";
 import dotenv from "dotenv";
-dotenv.config();
 
+dotenv.config();
 const { Pool } = pkg;
 const app = express();
+app.use(cors());
+app.use(express.json());
 const upload = multer({ storage: multer.memoryStorage() });
-const PORT = process.env.PORT || 10000;
 
-// ======================================================
-// 🗄️ Подключение к базе данных
-// ======================================================
+// === КЛЮЧИ ===
+let keys = [];
+if (process.env.USER_KEYS) {
+  try {
+    const parsed = JSON.parse(process.env.USER_KEYS);
+    if (parsed && Array.isArray(parsed.keys)) {
+      keys = parsed.keys;
+      console.log(`✅ Загружено ${keys.length} API-ключей из окружения`);
+    }
+  } catch (err) {
+    console.error("❌ Ошибка при чтении USER_KEYS:", err);
+  }
+} else {
+  console.warn("⚠️ Переменная USER_KEYS не установлена");
+}
+
+// === МАСТЕР КЛЮЧ ===
+const MASTER_KEY = process.env.MASTER_KEY || "default-master";
+
+// === БАЗА ДАННЫХ ===
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
 });
 
-// ======================================================
-// 🔐 Загрузка ключей и мастер-ключа из .env
-// ======================================================
-const MASTER_KEY = process.env.MASTER_KEY || "default_master";
-let keyMap = {};
+// === ИНИЦИАЛИЗАЦИЯ ТАБЛИЦЫ ===
+await pool.query(`
+  CREATE TABLE IF NOT EXISTS ids (
+    id TEXT PRIMARY KEY,
+    added_by TEXT,
+    note TEXT DEFAULT '',
+    created_at TIMESTAMP DEFAULT NOW()
+  );
+`);
+console.log("✅ Таблица проверена");
 
-try {
-  keyMap = JSON.parse(process.env.API_KEYS || "{}");
-  console.log("✅ API ключи успешно загружены из .env");
-} catch (e) {
-  console.error("❌ Ошибка при чтении API_KEYS из .env:", e);
+// === ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ===
+const findUserByKey = (key) => {
+  const found = keys.find((x) => x.key === key);
+  return found ? found.user : key;
+};
+
+// === API ===
+
+// Проверка доступности
+app.get("/", async (req, res) => {
+  const data = await pool.query("SELECT * FROM ids ORDER BY created_at DESC");
+  res.send(`
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<title>ID Manager</title>
+<style>
+  body { font-family: system-ui, sans-serif; background:#f8fafc; padding:20px; color:#111; }
+  table { width:100%; border-collapse:collapse; background:white; box-shadow:0 1px 3px rgba(0,0,0,0.1); }
+  th, td { padding:6px 8px; border-bottom:1px solid #ddd; }
+  th { background:#e0f0ff; text-align:left; }
+  tr:hover { background:#f1f5f9; }
+  input[type="text"] { padding:6px; width:250px; margin-bottom:10px; }
+  button { margin:4px; padding:6px 10px; border:1px solid #ccc; border-radius:4px; cursor:pointer; }
+  button:hover { background:#e5f0ff; }
+  textarea { width:100%; height:40px; }
+  .note { font-size:12px; color:#444; }
+</style>
+</head>
+<body>
+  <h2>🧩 ID Manager</h2>
+  <div>
+    <input id="filter" placeholder="Фильтр по ID или пользователю">
+    <button onclick="refresh()">🔄 Обновить</button>
+    <button onclick="deleteSelected()">🗑️ Удалить выбранные</button>
+    <button onclick="exportData()">📤 Экспорт</button>
+    <button onclick="document.getElementById('importFile').click()">📥 Импорт</button>
+    <input type="file" id="importFile" accept=".json" style="display:none">
+  </div>
+  <table id="idTable">
+    <thead>
+      <tr>
+        <th></th>
+        <th>ID</th>
+        <th>Добавил</th>
+        <th>Когда</th>
+        <th>Заметка</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+<script>
+let selected = new Set();
+const MASTER_KEY = localStorage.getItem("master_key") || prompt("Введите мастер ключ:");
+if (MASTER_KEY) localStorage.setItem("master_key", MASTER_KEY);
+
+document.getElementById("filter").addEventListener("input", render);
+
+async function load() {
+  const res = await fetch("/api/list-full");
+  const data = await res.json();
+  window.items = data.items;
+  render();
+}
+function render() {
+  const filter = document.getElementById("filter").value.toLowerCase();
+  const tbody = document.querySelector("#idTable tbody");
+  tbody.innerHTML = "";
+  (window.items||[])
+    .filter(x => x.id.toLowerCase().includes(filter) || x.added_by.toLowerCase().includes(filter))
+    .forEach(x => {
+      const tr = document.createElement("tr");
+      const checked = selected.has(x.id) ? "checked" : "";
+      tr.innerHTML = \`
+        <td><input type="checkbox" class="chk" data-id="\${x.id}" \${checked}></td>
+        <td>\${x.id}</td>
+        <td>\${x.added_by}</td>
+        <td>\${new Date(x.created_at).toLocaleString()}</td>
+        <td><textarea data-id="\${x.id}">\${x.note || ""}</textarea></td>
+      \`;
+      tbody.appendChild(tr);
+    });
+  document.querySelectorAll(".chk").forEach(c =>
+    c.addEventListener("change", e => {
+      const id = e.target.dataset.id;
+      if (e.target.checked) selected.add(id);
+      else selected.delete(id);
+    })
+  );
+  document.querySelectorAll("textarea").forEach(a =>
+    a.addEventListener("change", async e => {
+      const id = e.target.dataset.id;
+      const note = e.target.value;
+      await fetch("/api/note", {
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({ id, note, masterKey: MASTER_KEY })
+      });
+    })
+  );
 }
 
-// ======================================================
-// ⚙️ Настройка Express
-// ======================================================
-app.use(cors());
-app.use(bodyParser.json());
-app.use(express.urlencoded({ extended: true }));
-
-// ======================================================
-// 🚀 Инициализация таблицы, если не существует
-// ======================================================
-(async () => {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS ids (
-      id TEXT PRIMARY KEY,
-      user_name TEXT,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      note TEXT DEFAULT ''
-    )
-  `);
-  console.log("✅ Таблица 'ids' готова");
-})();
-
-// ======================================================
-// 🧠 Вспомогательная функция для проверки ключа
-// ======================================================
-function getUserByKey(key) {
-  return keyMap[key] || null;
+async function deleteSelected() {
+  if (!confirm("Удалить выбранные?")) return;
+  await fetch("/api/delete-multiple", {
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({ ids:[...selected], masterKey: MASTER_KEY })
+  });
+  selected.clear();
+  load();
 }
 
-// ======================================================
-// 📩 Добавление нового ID
-// ======================================================
-app.post("/api/add", async (req, res) => {
-  const { id, key } = req.body;
-  const user = getUserByKey(key);
-  if (!user) return res.status(403).json({ error: "Неверный API ключ" });
+async function exportData() {
+  const res = await fetch("/api/export");
+  const blob = await res.blob();
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "ids_export.json";
+  a.click();
+}
 
-  try {
-    await pool.query(
-      "INSERT INTO ids (id, user_name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING",
-      [id, user]
-    );
-    res.json({ success: true, user });
-  } catch (err) {
-    console.error("Ошибка добавления ID:", err);
-    res.status(500).json({ error: "Ошибка сервера" });
-  }
+document.getElementById("importFile").addEventListener("change", async e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("masterKey", MASTER_KEY);
+  await fetch("/api/import", { method:"POST", body:formData });
+  load();
 });
 
-// ======================================================
-// 📋 Получение полного списка
-// ======================================================
-app.get("/api/list-full", async (_, res) => {
-  try {
-    const result = await pool.query("SELECT * FROM ids ORDER BY created_at DESC");
-    res.json(result.rows);
-  } catch (err) {
-    console.error("Ошибка получения списка:", err);
-    res.status(500).json({ error: "Ошибка сервера" });
-  }
+function refresh(){ load(); }
+setInterval(load, 2000);
+load();
+</script>
+</body>
+</html>
+`);
 });
 
-// ======================================================
-// 🗑️ Удаление записей
-// ======================================================
-app.post("/api/delete", async (req, res) => {
-  const { ids, masterKey } = req.body;
-  if (masterKey !== MASTER_KEY) return res.status(403).json({ error: "Неверный мастер ключ" });
-
-  try {
-    await pool.query("DELETE FROM ids WHERE id = ANY($1)", [ids]);
-    res.json({ success: true });
-  } catch (err) {
-    console.error("Ошибка удаления:", err);
-    res.status(500).json({ error: "Ошибка сервера" });
-  }
+// === API: данные ===
+app.get("/api/list-full", async (req, res) => {
+  const q = await pool.query("SELECT * FROM ids ORDER BY created_at DESC");
+  res.json({ items: q.rows });
 });
 
-// ======================================================
-// 📝 Обновление заметки
-// ======================================================
+// Добавить ID (для расширения)
+app.post("/api/add-id", async (req, res) => {
+  const { id, apiKey } = req.body;
+  if (!id || !apiKey) return res.status(400).json({ error: "Неверные данные" });
+  const user = findUserByKey(apiKey);
+  await pool.query(
+    "INSERT INTO ids (id, added_by) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING",
+    [id, user]
+  );
+  res.json({ success: true });
+});
+
+// Обновить заметку
 app.post("/api/note", async (req, res) => {
-  const { id, note } = req.body;
-  try {
-    await pool.query("UPDATE ids SET note = $1 WHERE id = $2", [note, id]);
-    res.json({ success: true });
-  } catch (err) {
-    console.error("Ошибка обновления заметки:", err);
-    res.status(500).json({ error: "Ошибка сервера" });
-  }
+  const { id, note, masterKey } = req.body;
+  if (masterKey !== MASTER_KEY) return res.status(403).json({ error: "Нет доступа" });
+  await pool.query("UPDATE ids SET note=$1 WHERE id=$2", [note, id]);
+  res.json({ success: true });
 });
 
-// ======================================================
-// 📦 Импорт через файл (доступно только с мастер-ключом)
-// ======================================================
+// Удалить несколько
+app.post("/api/delete-multiple", async (req, res) => {
+  const { ids, masterKey } = req.body;
+  if (masterKey !== MASTER_KEY) return res.status(403).json({ error: "Нет доступа" });
+  await pool.query("DELETE FROM ids WHERE id = ANY($1::text[])", [ids]);
+  res.json({ success: true });
+});
+
+// Экспорт
+app.get("/api/export", async (req, res) => {
+  const q = await pool.query("SELECT * FROM ids");
+  res.setHeader("Content-Disposition", "attachment; filename=ids_export.json");
+  res.json(q.rows);
+});
+
+// Импорт
 app.post("/api/import", upload.single("file"), async (req, res) => {
   const { masterKey } = req.body;
-  if (masterKey !== MASTER_KEY) return res.status(403).json({ error: "Неверный мастер ключ" });
-
-  try {
-    const data = JSON.parse(req.file.buffer.toString());
-    for (const item of data) {
-      await pool.query(
-        "INSERT INTO ids (id, user_name, note) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING",
-        [item.id, item.user_name || "Импорт", item.note || ""]
-      );
-    }
-    res.json({ success: true });
-  } catch (err) {
-    console.error("Ошибка импорта:", err);
-    res.status(500).json({ error: "Ошибка импорта" });
+  if (masterKey !== MASTER_KEY) return res.status(403).json({ error: "Нет доступа" });
+  const fileData = JSON.parse(req.file.buffer.toString());
+  for (const row of fileData) {
+    await pool.query(
+      "INSERT INTO ids (id, added_by, note, created_at) VALUES ($1,$2,$3,$4) ON CONFLICT (id) DO NOTHING",
+      [row.id, row.added_by, row.note || "", row.created_at || new Date()]
+    );
   }
+  res.json({ success: true });
 });
 
-// ======================================================
-// 🧾 Экспорт данных
-// ======================================================
-app.get("/api/export", async (_, res) => {
-  try {
-    const result = await pool.query("SELECT * FROM ids ORDER BY created_at DESC");
-    res.json(result.rows);
-  } catch (err) {
-    console.error("Ошибка экспорта:", err);
-    res.status(500).json({ error: "Ошибка сервера" });
-  }
-});
-
-// ======================================================
-// 🌐 Главная страница (таблица с автообновлением и дизайном)
-// ======================================================
-app.get("/", async (_, res) => {
-  const result = await pool.query("SELECT * FROM ids ORDER BY created_at DESC");
-  const rows = result.rows;
-
-  res.send(`
-    <!DOCTYPE html>
-    <html lang="ru">
-    <head>
-      <meta charset="UTF-8" />
-      <title>ID Tracker</title>
-      <style>
-        body { font-family: system-ui; background: #f9fafb; padding: 20px; }
-        h1 { text-align: center; color: #333; }
-        table { width: 100%; border-collapse: collapse; margin-top: 20px; background: white; box-shadow: 0 2px 6px rgba(0,0,0,0.1); border-radius: 10px; overflow: hidden; }
-        th, td { padding: 10px; border-bottom: 1px solid #eee; text-align: left; }
-        tr:hover { background: #f1f5f9; }
-        input.note { width: 100%; border: none; background: #f8fafc; padding: 6px; border-radius: 4px; }
-        .controls { margin-bottom: 20px; text-align: center; }
-        button { margin: 5px; padding: 10px 15px; border: none; border-radius: 6px; cursor: pointer; background: #2563eb; color: white; }
-        button:hover { background: #1d4ed8; }
-      </style>
-    </head>
-    <body>
-      <h1>📋 Список ID</h1>
-      <div class="controls">
-        <input type="password" id="masterKey" placeholder="Мастер ключ">
-        <button onclick="deleteSelected()">🗑 Удалить выбранные</button>
-        <button onclick="exportData()">⬇️ Экспорт</button>
-        <input type="file" id="importFile" accept=".json">
-        <button onclick="importData()">⬆️ Импорт</button>
-      </div>
-      <table id="table">
-        <thead>
-          <tr><th></th><th>ID</th><th>Пользователь</th><th>Дата</th><th>Заметка</th></tr>
-        </thead>
-        <tbody>
-          ${rows
-            .map(
-              (x) => `
-              <tr data-id="${x.id}">
-                <td><input type="checkbox" class="chk"></td>
-                <td>${x.id}</td>
-                <td>${x.user_name}</td>
-                <td>${new Date(x.created_at).toLocaleString()}</td>
-                <td><input class="note" value="${x.note || ""}" onchange="saveNote('${x.id}', this.value)"></td>
-              </tr>`
-            )
-            .join("")}
-        </tbody>
-      </table>
-
-      <script>
-        async function refresh() {
-          const res = await fetch("/api/list-full");
-          const data = await res.json();
-          const checked = Array.from(document.querySelectorAll('.chk'))
-            .filter(c => c.checked)
-            .map(c => c.closest('tr').dataset.id);
-          const tbody = document.querySelector("#table tbody");
-          tbody.innerHTML = data.map(x => \`
-            <tr data-id="\${x.id}">
-              <td><input type="checkbox" class="chk" \${checked.includes(x.id) ? "checked" : ""}></td>
-              <td>\${x.id}</td>
-              <td>\${x.user_name}</td>
-              <td>\${new Date(x.created_at).toLocaleString()}</td>
-              <td><input class="note" value="\${x.note || ""}" onchange="saveNote('\${x.id}', this.value)"></td>
-            </tr>\`).join("");
-        }
-        setInterval(refresh, 2000);
-
-        async function deleteSelected() {
-          const ids = Array.from(document.querySelectorAll('.chk:checked')).map(c => c.closest('tr').dataset.id);
-          const masterKey = document.querySelector('#masterKey').value.trim();
-          if (!ids.length) return alert("Ничего не выбрано");
-          const res = await fetch("/api/delete", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ ids, masterKey })
-          });
-          const r = await res.json();
-          if (r.success) refresh();
-          else alert(r.error || "Ошибка");
-        }
-
-        async function saveNote(id, note) {
-          await fetch("/api/note", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ id, note })
-          });
-        }
-
-        async function exportData() {
-          const res = await fetch("/api/export");
-          const data = await res.json();
-          const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-          const a = document.createElement("a");
-          a.href = URL.createObjectURL(blob);
-          a.download = "ids_export.json";
-          a.click();
-        }
-
-        async function importData() {
-          const fileInput = document.querySelector('#importFile');
-          const masterKey = document.querySelector('#masterKey').value.trim();
-          if (!fileInput.files.length) return alert("Выбери файл");
-          const form = new FormData();
-          form.append("file", fileInput.files[0]);
-          form.append("masterKey", masterKey);
-          const res = await fetch("/api/import", { method: "POST", body: form });
-          const r = await res.json();
-          if (r.success) refresh();
-          else alert(r.error || "Ошибка импорта");
-        }
-      </script>
-    </body>
-    </html>
-  `);
-});
-
-// ======================================================
-// 🏁 Запуск сервера
-// ======================================================
-app.listen(PORT, () => console.log(`🚀 Сервер запущен на порту ${PORT}`));
+// === ЗАПУСК ===
+app.listen(process.env.PORT || 10000, () => console.log("🚀 Сервер запущен"));

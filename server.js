@@ -1,33 +1,26 @@
 import express from "express";
 import cors from "cors";
 import fs from "fs";
-import multer from "multer";
 import pkg from "pg";
+import multer from "multer";
 import dotenv from "dotenv";
 
 dotenv.config();
+const MASTER_KEY = process.env.MASTER_KEY;
+
 const { Pool } = pkg;
-
-// ===============================
-// 🔧 Конфигурация
-// ===============================
 const app = express();
-const upload = multer({ dest: "uploads/" });
-const PORT = process.env.PORT || 10000;
-const MASTER_KEY = process.env.MASTER_KEY || "changeme";
-
 app.use(cors());
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+const upload = multer({ dest: "uploads/" });
 
-// ===============================
-// 💾 PostgreSQL
-// ===============================
+// === PostgreSQL ===
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false }
+  ssl: { rejectUnauthorized: false },
 });
 
+// === Инициализация БД ===
 async function initDB() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ids (
@@ -41,283 +34,246 @@ async function initDB() {
 }
 await initDB();
 
-// ===============================
-// 🔑 Загрузка ключей
-// ===============================
-let keyMap = new Map();
-
-function loadKeys() {
-  try {
-    if (process.env.KEYS_JSON) {
-      const data = JSON.parse(process.env.KEYS_JSON);
-      keyMap = new Map(data.keys.map(k => [k.key, k.user]));
-      console.log("🔑 Ключи загружены из переменной окружения");
-    } else if (fs.existsSync("./keys.json")) {
-      const data = JSON.parse(fs.readFileSync("./keys.json", "utf8"));
-      keyMap = new Map(data.keys.map(k => [k.key, k.user]));
-      console.log("🔑 Ключи загружены из файла keys.json");
-    } else {
-      console.warn("⚠️ Ключи не найдены — добавление ID будет ограничено");
-    }
-  } catch (e) {
-    console.error("❌ Ошибка загрузки ключей:", e);
-  }
+// === Загрузка keys.json (на сервере Render должен быть в корне) ===
+let keyMap = {};
+try {
+  const keysRaw = fs.readFileSync("./keys.json", "utf8");
+  const keys = JSON.parse(keysRaw).keys;
+  keyMap = Object.fromEntries(keys.map(k => [k.key, k.user]));
+} catch {
+  console.warn("⚠️ keys.json не найден, пользователи будут отображаться как ключи");
 }
-loadKeys();
 
-// ===============================
-// 🌐 Главная страница
-// ===============================
-app.get("/", async (req, res) => {
-  res.send(`
-  <!DOCTYPE html>
-  <html lang="ru">
-  <head>
-    <meta charset="UTF-8" />
-    <title>🔍 Список ID</title>
-    <style>
-      body { font-family: system-ui, sans-serif; margin: 40px; background:#f9fafb; color:#111; }
-      h1 { font-size: 22px; margin-bottom: 20px; }
-      button { cursor: pointer; border: none; border-radius: 6px; padding: 6px 10px; font-size: 14px; transition: background 0.3s, transform 0.1s; }
-      button:hover { transform: scale(1.05); }
-      .toolbar { margin-bottom: 15px; display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
-      table { border-collapse: collapse; width: 100%; background:white; box-shadow:0 2px 6px rgba(0,0,0,0.1); }
-      th, td { padding: 10px 12px; border-bottom: 1px solid #eee; text-align:left; vertical-align:top; }
-      th { background:#e3f2fd; }
-      tr:hover { background:#f8fbff; }
-      .note { color:#444; font-size:13px; }
-      input[type="checkbox"] { transform:scale(1.2); margin-right:6px; }
-      #filter { padding:6px 8px; width: 240px; border-radius:6px; border:1px solid #ccc; }
-      textarea { width:100%; min-height:50px; resize:vertical; border-radius:6px; border:1px solid #ddd; padding:6px; }
-      #status { font-size:12px; color:#666; margin-top:6px; }
-    </style>
-  </head>
-  <body>
-    <h1>🔍 Список добавленных ID</h1>
-    <div class="toolbar">
-      <input id="filter" placeholder="Фильтр по ID или пользователю">
-      <button id="refreshBtn">🔄 Обновить</button>
-      <button id="addBtn">➕ Добавить вручную</button>
-      <button id="deleteBtn">🗑️ Удалить выбранные</button>
-      <button id="exportBtn">📤 Экспорт</button>
-      <input type="file" id="importFile" style="display:none">
-      <button id="importBtn">📥 Импорт</button>
-      <button id="keyBtn">🔑 Мастер-ключ</button>
-    </div>
-    <div id="status">⏳ Автообновление каждые 2 секунды</div>
-    <table>
-      <thead>
-        <tr>
-          <th></th>
-          <th>ID</th>
-          <th>Добавил</th>
-          <th>Когда</th>
-          <th>Заметка</th>
-        </tr>
-      </thead>
-      <tbody id="tbody"></tbody>
-    </table>
+// === API ===
 
-<script>
-  const selected = new Set();
-
-  function getMasterKey() {
-    return localStorage.getItem("master_key");
-  }
-  function requestMasterKey() {
-    const existing = getMasterKey();
-    const key = prompt(existing ? "Введите новый мастер-ключ (или оставьте пустым):" : "Введите мастер-ключ:");
-    if (key) localStorage.setItem("master_key", key);
-  }
-
-  async function loadData() {
-    try {
-      const res = await fetch("/api/list-full");
-      const data = await res.json();
-      const tbody = document.getElementById("tbody");
-      const filter = document.getElementById("filter").value.toLowerCase();
-      tbody.innerHTML = "";
-
-      data.items
-        .filter(x => x.id.toLowerCase().includes(filter) || x.added_by.toLowerCase().includes(filter))
-        .forEach(x => {
-          const tr = document.createElement("tr");
-          const checked = selected.has(x.id) ? "checked" : "";
-          tr.innerHTML = `
-            <td><input type="checkbox" class="chk" data-id="${x.id}" ${checked}></td>
-            <td>${x.id}</td>
-            <td>${x.added_by}</td>
-            <td>${new Date(x.created_at).toLocaleString()}</td>
-            <td>
-              <textarea data-id="${x.id}" class="note">${x.note || ""}</textarea>
-            </td>
-          `;
-          tbody.appendChild(tr);
-        });
-
-      // Сохраняем состояние выбранных чекбоксов
-      document.querySelectorAll(".chk").forEach(chk => {
-        chk.addEventListener("change", () => {
-          if (chk.checked) selected.add(chk.dataset.id);
-          else selected.delete(chk.dataset.id);
-        });
-      });
-
-      // Заметки
-      document.querySelectorAll(".note").forEach(el => {
-        el.addEventListener("change", async () => {
-          const key = getMasterKey();
-          if (!key) return alert("Введите мастер-ключ перед изменением заметок");
-          const id = el.dataset.id;
-          const note = el.value.trim();
-          const res = await fetch("/api/update-note", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ id, note, masterKey: key })
-          });
-          const r = await res.json();
-          if (!r.success) alert("Ошибка сохранения заметки: " + r.error);
-        });
-      });
-
-      // Обновляем статус
-      const now = new Date().toLocaleTimeString();
-      document.getElementById("status").textContent = "🕓 Обновлено: " + now;
-    } catch (err) {
-      console.error("Ошибка загрузки:", err);
-      document.getElementById("status").textContent = "⚠️ Ошибка обновления";
-    }
-  }
-
-  async function deleteSelected() {
-    const key = getMasterKey();
-    if (!key) return alert("Введите мастер-ключ");
-    const ids = Array.from(selected);
-    if (ids.length === 0) return alert("Выберите хотя бы один ID");
-    if (!confirm("Удалить выбранные?")) return;
-    for (const id of ids) {
-      await fetch("/api/delete", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, masterKey: key })
-      });
-      selected.delete(id);
-    }
-    loadData();
-  }
-
-  async function addManual() {
-    const key = getMasterKey();
-    if (!key) return alert("Введите мастер-ключ");
-    const id = prompt("Введите новый ID:");
-    if (!id) return;
-    const res = await fetch("/api/add-id", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, apiKey: key })
-    });
-    const r = await res.json();
-    if (!r.success) alert("Ошибка добавления: " + r.error);
-    loadData();
-  }
-
-  async function exportIDs() {
-    const res = await fetch("/api/list-full");
-    const data = await res.json();
-    const blob = new Blob([JSON.stringify(data.items, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "ids_export.json";
-    a.click();
-  }
-
-  async function importIDs(file) {
-    const key = getMasterKey();
-    if (!key) return alert("Введите мастер-ключ");
-    const formData = new FormData();
-    formData.append("file", file);
-    formData.append("masterKey", key);
-    const res = await fetch("/api/import", { method: "POST", body: formData });
-    const data = await res.json();
-    if (data.success) alert("Импортировано: " + data.imported);
-    else alert("Ошибка импорта: " + data.error);
-    loadData();
-  }
-
-  // Обработчики
-  document.getElementById("refreshBtn").onclick = loadData;
-  document.getElementById("filter").oninput = loadData;
-  document.getElementById("deleteBtn").onclick = deleteSelected;
-  document.getElementById("addBtn").onclick = addManual;
-  document.getElementById("exportBtn").onclick = exportIDs;
-  document.getElementById("importBtn").onclick = () => document.getElementById("importFile").click();
-  document.getElementById("importFile").onchange = e => importIDs(e.target.files[0]);
-  document.getElementById("keyBtn").onclick = requestMasterKey;
-
-  // 🔁 Автоматическое обновление каждые 2 секунды
-  loadData();
-  setInterval(loadData, 2000);
-</script>
-  </body>
-  </html>
-  `);
-});
-
-// ===============================
-// 📡 API методы
-// ===============================
-app.get("/api/list-full", async (req, res) => {
+// Получить весь список
+app.get("/api/list", async (req, res) => {
   const result = await pool.query("SELECT * FROM ids ORDER BY created_at DESC");
   res.json({ items: result.rows });
 });
 
+// Добавить ID
 app.post("/api/add-id", async (req, res) => {
   const { id, apiKey } = req.body;
-  if (!id || !apiKey) return res.status(400).json({ error: "ID или ключ отсутствует" });
-  const addedBy = keyMap.get(apiKey) || "Unknown";
+  if (!id || !apiKey) return res.status(400).json({ error: "Отсутствует ID или ключ" });
+  const user = keyMap[apiKey] || apiKey;
   await pool.query(
-    `INSERT INTO ids (id, added_by) VALUES ($1, $2)
+    `INSERT INTO ids (id, added_by)
+     VALUES ($1, $2)
      ON CONFLICT (id) DO NOTHING`,
-    [id, addedBy]
+    [id, user]
   );
   res.json({ success: true });
 });
 
-app.post("/api/update-note", async (req, res) => {
-  const { id, note, masterKey } = req.body;
-  if (masterKey !== MASTER_KEY) return res.status(403).json({ error: "Неверный ключ" });
-  await pool.query("UPDATE ids SET note=$1 WHERE id=$2", [note, id]);
-  res.json({ success: true });
-});
-
+// Удалить несколько ID
 app.post("/api/delete", async (req, res) => {
-  const { id, masterKey } = req.body;
-  if (masterKey !== MASTER_KEY) return res.status(403).json({ error: "Неверный ключ" });
-  await pool.query("DELETE FROM ids WHERE id=$1", [id]);
+  const { ids, masterKey } = req.body;
+  if (masterKey !== MASTER_KEY) return res.status(403).json({ error: "Неверный мастер-ключ" });
+  if (!Array.isArray(ids)) return res.status(400).json({ error: "Некорректные данные" });
+
+  await pool.query(`DELETE FROM ids WHERE id = ANY($1)`, [ids]);
   res.json({ success: true });
 });
 
+// Добавить / обновить заметку
+app.post("/api/note", async (req, res) => {
+  const { id, note } = req.body;
+  await pool.query(`UPDATE ids SET note = $1 WHERE id = $2`, [note, id]);
+  res.json({ success: true });
+});
+
+// Импорт ID (через файл)
 app.post("/api/import", upload.single("file"), async (req, res) => {
   const { masterKey } = req.body;
-  if (masterKey !== MASTER_KEY) return res.status(403).json({ error: "Неверный ключ" });
-  try {
-    const fileData = JSON.parse(fs.readFileSync(req.file.path, "utf8"));
-    let imported = 0;
-    for (const item of fileData) {
-      await pool.query(
-        "INSERT INTO ids (id, added_by, note) VALUES ($1,$2,$3) ON CONFLICT (id) DO NOTHING",
-        [item.id, item.added_by || "import", item.note || null]
-      );
-      imported++;
-    }
-    res.json({ success: true, imported });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+  if (masterKey !== MASTER_KEY) return res.status(403).json({ error: "Неверный мастер-ключ" });
+  if (!req.file) return res.status(400).json({ error: "Файл не загружен" });
+
+  const raw = fs.readFileSync(req.file.path, "utf8");
+  const data = JSON.parse(raw);
+  let added = 0;
+
+  for (const id of data.ids || []) {
+    await pool.query(
+      `INSERT INTO ids (id, added_by)
+       VALUES ($1, $2)
+       ON CONFLICT (id) DO NOTHING`,
+      [id, "import"]
+    );
+    added++;
   }
+
+  fs.unlinkSync(req.file.path);
+  res.json({ success: true, added });
 });
 
-// ===============================
-// 🚀 Запуск
-// ===============================
-app.listen(PORT, () => console.log("🚀 Сервер запущен на порту " + PORT));
+// === Главная страница ===
+app.get("/", async (req, res) => {
+  res.send(`
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>ID Manager</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      background: #f6f8fa;
+      margin: 0;
+      padding: 20px;
+      color: #111;
+    }
+    h1 {
+      font-size: 20px;
+      margin-bottom: 16px;
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      background: white;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+    }
+    th, td {
+      padding: 6px 8px;
+      border-bottom: 1px solid #eee;
+      text-align: left;
+      font-size: 14px;
+    }
+    th {
+      background: #e9f2ff;
+    }
+    tr:hover {
+      background: #f2f7ff;
+    }
+    .controls {
+      margin-bottom: 12px;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    input, button {
+      font-size: 14px;
+      padding: 6px 10px;
+    }
+    button {
+      border: none;
+      background: #007bff;
+      color: white;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #005fcc;
+    }
+    .note {
+      color: #444;
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <h1>📋 Список добавленных ID</h1>
+
+  <div class="controls">
+    <input type="password" id="masterKey" placeholder="Мастер ключ">
+    <button onclick="importIDs()">📥 Импорт</button>
+    <input type="file" id="importFile" style="display:none" accept=".json">
+    <button id="deleteBtn" onclick="deleteSelected()">🗑️ Удалить выбранные</button>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th><input type="checkbox" id="chkAll"></th>
+        <th>ID</th>
+        <th>Добавил</th>
+        <th>Когда</th>
+        <th>Заметка</th>
+      </tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+  </table>
+
+  <script>
+    const tbody = document.getElementById('tbody');
+    const masterInput = document.getElementById('masterKey');
+    const chkAll = document.getElementById('chkAll');
+
+    async function load() {
+      const res = await fetch('/api/list');
+      const data = await res.json();
+      tbody.innerHTML = data.items.map(x => \`
+        <tr>
+          <td><input type="checkbox" class="chk" data-id="\${x.id}"></td>
+          <td>\${x.id}</td>
+          <td>\${x.added_by}</td>
+          <td>\${new Date(x.created_at).toLocaleString()}</td>
+          <td>
+            <input class="note" type="text" value="\${x.note || ''}" data-id="\${x.id}" placeholder="Добавить заметку...">
+          </td>
+        </tr>\`).join('');
+      bindEvents();
+    }
+
+    function bindEvents() {
+      document.querySelectorAll('.note').forEach(input => {
+        input.addEventListener('change', async () => {
+          await fetch('/api/note', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ id: input.dataset.id, note: input.value })
+          });
+        });
+      });
+    }
+
+    chkAll.addEventListener('change', () => {
+      document.querySelectorAll('.chk').forEach(chk => chk.checked = chkAll.checked);
+    });
+
+    async function deleteSelected() {
+      const masterKey = masterInput.value.trim();
+      if (!masterKey) return alert('Введите мастер-ключ');
+      const ids = Array.from(document.querySelectorAll('.chk:checked')).map(x => x.dataset.id);
+      if (ids.length === 0) return alert('Не выбрано ни одной записи');
+
+      const res = await fetch('/api/delete', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ ids, masterKey })
+      });
+      const data = await res.json();
+      if (data.success) load();
+      else alert(data.error || 'Ошибка удаления');
+    }
+
+    function importIDs() {
+      document.getElementById('importFile').click();
+    }
+
+    document.getElementById('importFile').addEventListener('change', async e => {
+      const file = e.target.files[0];
+      const masterKey = masterInput.value.trim();
+      if (!file || !masterKey) return alert('Файл или ключ не указан');
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('masterKey', masterKey);
+      const res = await fetch('/api/import', { method: 'POST', body: formData });
+      const data = await res.json();
+      if (data.success) {
+        alert('Импортировано: ' + data.added);
+        load();
+      } else alert(data.error);
+    });
+
+    load();
+    setInterval(load, 2000);
+  </script>
+</body>
+</html>
+  `);
+});
+
+app.listen(process.env.PORT || 10000, () =>
+  console.log("🚀 Сервер запущен и слушает порт 10000")
+);

@@ -8,13 +8,12 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// --- Подключение к БД ---
+// ===================== БАЗА ДАННЫХ =====================
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL || "postgres://user:pass@host:5432/dbname",
   ssl: { rejectUnauthorized: false },
 });
 
-// --- Проверяем/создаём таблицу ---
 async function initDB() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ids (
@@ -26,45 +25,37 @@ async function initDB() {
   console.log("✅ Таблица проверена / создана");
 }
 
-// --- Миграция из старого файла ---
-async function migrateFromJSON() {
-  const filePath = "./ids.json";
-  if (!fs.existsSync(filePath)) {
-    console.log("ℹ️ Файл ids.json не найден — пропускаем миграцию");
-    return;
-  }
+// ===================== КЛЮЧИ =====================
+const KEYS_FILE = "./keys.json";
+let KEY_MAP = new Map();
 
+function loadKeys() {
   try {
-    const raw = fs.readFileSync(filePath, "utf8");
-    const data = JSON.parse(raw);
-    if (!Array.isArray(data.ids)) {
-      console.log("⚠️ Неверный формат ids.json — ожидается { ids: [] }");
-      return;
-    }
-
-    let added = 0;
-    for (const id of data.ids) {
-      await pool.query(
-        `INSERT INTO ids (id, added_by)
-         VALUES ($1, $2)
-         ON CONFLICT (id) DO NOTHING`,
-        [id, "migration"]
-      );
-      added++;
-    }
-    console.log(`✅ Миграция завершена. Добавлено ${added} записей из ids.json`);
+    const raw = fs.readFileSync(KEYS_FILE, "utf8");
+    const parsed = JSON.parse(raw);
+    KEY_MAP = new Map(parsed.keys.map(k => [k.key, k.user]));
+    console.log("✅ Загружено ключей:", KEY_MAP.size);
   } catch (err) {
-    console.error("❌ Ошибка при миграции:", err);
+    console.error("❌ Не удалось загрузить keys.json:", err);
+    KEY_MAP = new Map();
   }
 }
 
-// --- Запускаем инициализацию ---
-await initDB();
-await migrateFromJSON();
+// Загружаем ключи при старте
+loadKeys();
 
-// --- API ---
-app.get("/", (req, res) => res.send("✅ ID API работает через PostgreSQL"));
+// Автообновление keys.json без перезапуска
+fs.watchFile(KEYS_FILE, () => {
+  console.log("♻️ Файл keys.json изменён — перезагружаем ключи...");
+  loadKeys();
+});
 
+// ===================== API =====================
+
+// Проверка
+app.get("/", (req, res) => res.send("✅ ID API работает через PostgreSQL + keys.json"));
+
+// Список ID для подсветки
 app.get("/api/highlight-list", async (req, res) => {
   try {
     const result = await pool.query("SELECT id FROM ids");
@@ -74,25 +65,50 @@ app.get("/api/highlight-list", async (req, res) => {
   }
 });
 
+// Полный список ID для страницы /list
+app.get("/api/list-full", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT * FROM ids ORDER BY created_at DESC");
+    res.json({ items: result.rows });
+  } catch (e) {
+    res.status(500).json({ error: "Ошибка получения полного списка" });
+  }
+});
+
+// Добавление нового ID
 app.post("/api/add-id", async (req, res) => {
   try {
     const { id, apiKey } = req.body;
     if (!id || !apiKey)
       return res.status(400).json({ error: "ID или ключ отсутствует" });
 
+    const user = KEY_MAP.get(apiKey);
+    if (!user) {
+      return res.status(403).json({ error: "Неверный API ключ" });
+    }
+
     await pool.query(
       `INSERT INTO ids (id, added_by)
        VALUES ($1, $2)
        ON CONFLICT (id) DO NOTHING`,
-      [id, apiKey]
+      [id, user]
     );
-    res.json({ success: true });
+
+    res.json({
+      success: true,
+      entry: {
+        id,
+        added_by: user,
+        created_at: new Date().toISOString()
+      }
+    });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: "Ошибка добавления ID" });
   }
 });
 
+// Информация об ID
 app.get("/api/info/:id", async (req, res) => {
   try {
     const result = await pool.query("SELECT * FROM ids WHERE id = $1", [req.params.id]);
@@ -103,22 +119,7 @@ app.get("/api/info/:id", async (req, res) => {
   }
 });
 
-
-// --- Новый маршрут: полный список для клиента и страницы /list ---
-app.get("/api/list-full", async (req, res) => {
-  try {
-    const result = await pool.query(
-      "SELECT id, added_by, created_at FROM ids ORDER BY created_at DESC"
-    );
-    res.json({ items: result.rows }); // <- клиент ждёт именно { items: [...] }
-  } catch (e) {
-    console.error("Ошибка при получении списка:", e);
-    res.status(500).json({ error: "Ошибка при получении списка ID" });
-  }
-});
-
-
-// Простая страница со списком ID
+// ===================== HTML СТРАНИЦА =====================
 app.get("/list", async (req, res) => {
   res.send(`
   <!doctype html>
@@ -178,14 +179,14 @@ app.get("/list", async (req, res) => {
 
       document.querySelectorAll("th").forEach(th => {
         th.addEventListener("click", () => {
-          const field = th.getAttribute("data-field");
-          const rows = Array.from(document.querySelectorAll("#idTable tbody tr"));
-          const sorted = rows.sort((a,b) =>
-            a.children[th.cellIndex].textContent.localeCompare(b.children[th.cellIndex].textContent)
-          );
+          const idx = th.cellIndex;
           const tbody = document.querySelector("#idTable tbody");
+          const rows = Array.from(tbody.querySelectorAll("tr"));
+          rows.sort((a, b) =>
+            a.children[idx].textContent.localeCompare(b.children[idx].textContent)
+          );
           tbody.innerHTML = "";
-          sorted.forEach(r => tbody.appendChild(r));
+          rows.forEach(r => tbody.appendChild(r));
         });
       });
 
@@ -195,6 +196,9 @@ app.get("/list", async (req, res) => {
   </html>
   `);
 });
+
+// ===================== ЗАПУСК =====================
+await initDB();
 
 app.listen(process.env.PORT || 10000, () =>
   console.log("🚀 Сервер запущен и слушает порт 10000")

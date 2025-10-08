@@ -34,7 +34,7 @@ async function initDB() {
 }
 await initDB();
 
-// === Загрузка keys.json (на сервере Render должен быть в корне) ===
+// === Загрузка keys.json (не в GitHub, а на Render) ===
 let keyMap = {};
 try {
   const keysRaw = fs.readFileSync("./keys.json", "utf8");
@@ -168,6 +168,14 @@ app.get("/", async (req, res) => {
     .note {
       color: #444;
       font-size: 13px;
+      width: 100%;
+      border: none;
+      background: transparent;
+      border-bottom: 1px dashed #ccc;
+      outline: none;
+    }
+    .note:focus {
+      background: #f8fbff;
     }
   </style>
 </head>
@@ -199,12 +207,19 @@ app.get("/", async (req, res) => {
     const masterInput = document.getElementById('masterKey');
     const chkAll = document.getElementById('chkAll');
 
+    // запоминаем выбранные ID
+    let selected = new Set();
+
     async function load() {
       const res = await fetch('/api/list');
       const data = await res.json();
+
+      const currentSelected = new Set([...document.querySelectorAll('.chk:checked')].map(c => c.dataset.id));
+      selected = new Set([...selected, ...currentSelected]);
+
       tbody.innerHTML = data.items.map(x => \`
         <tr>
-          <td><input type="checkbox" class="chk" data-id="\${x.id}"></td>
+          <td><input type="checkbox" class="chk" data-id="\${x.id}" \${selected.has(x.id) ? "checked" : ""}></td>
           <td>\${x.id}</td>
           <td>\${x.added_by}</td>
           <td>\${new Date(x.created_at).toLocaleString()}</td>
@@ -225,16 +240,28 @@ app.get("/", async (req, res) => {
           });
         });
       });
+
+      document.querySelectorAll('.chk').forEach(chk => {
+        chk.addEventListener('change', () => {
+          if (chk.checked) selected.add(chk.dataset.id);
+          else selected.delete(chk.dataset.id);
+        });
+      });
     }
 
     chkAll.addEventListener('change', () => {
-      document.querySelectorAll('.chk').forEach(chk => chk.checked = chkAll.checked);
+      const all = chkAll.checked;
+      document.querySelectorAll('.chk').forEach(chk => {
+        chk.checked = all;
+        if (all) selected.add(chk.dataset.id);
+        else selected.delete(chk.dataset.id);
+      });
     });
 
     async function deleteSelected() {
       const masterKey = masterInput.value.trim();
       if (!masterKey) return alert('Введите мастер-ключ');
-      const ids = Array.from(document.querySelectorAll('.chk:checked')).map(x => x.dataset.id);
+      const ids = Array.from(selected);
       if (ids.length === 0) return alert('Не выбрано ни одной записи');
 
       const res = await fetch('/api/delete', {
@@ -243,8 +270,10 @@ app.get("/", async (req, res) => {
         body: JSON.stringify({ ids, masterKey })
       });
       const data = await res.json();
-      if (data.success) load();
-      else alert(data.error || 'Ошибка удаления');
+      if (data.success) {
+        selected.clear();
+        load();
+      } else alert(data.error || 'Ошибка удаления');
     }
 
     function importIDs() {

@@ -52,9 +52,6 @@ fs.watchFile(KEYS_FILE, () => {
 
 // ===================== API =====================
 
-// Проверка
-app.get("/", (req, res) => res.send("✅ ID API работает через PostgreSQL + keys.json"));
-
 // Список ID для подсветки
 app.get("/api/highlight-list", async (req, res) => {
   try {
@@ -65,7 +62,7 @@ app.get("/api/highlight-list", async (req, res) => {
   }
 });
 
-// Полный список ID для страницы /list
+// Полный список ID
 app.get("/api/list-full", async (req, res) => {
   try {
     const result = await pool.query("SELECT * FROM ids ORDER BY created_at DESC");
@@ -108,19 +105,8 @@ app.post("/api/add-id", async (req, res) => {
   }
 });
 
-// Информация об ID
-app.get("/api/info/:id", async (req, res) => {
-  try {
-    const result = await pool.query("SELECT * FROM ids WHERE id = $1", [req.params.id]);
-    if (result.rows.length === 0) return res.status(404).json({ error: "Не найдено" });
-    res.json(result.rows[0]);
-  } catch (e) {
-    res.status(500).json({ error: "Ошибка запроса" });
-  }
-});
-
-// ===================== HTML СТРАНИЦА =====================
-app.get("/list", async (req, res) => {
+// ===================== HTML ИНТЕРФЕЙС =====================
+app.get("/", async (req, res) => {
   res.send(`
   <!doctype html>
   <html lang="ru">
@@ -134,12 +120,27 @@ app.get("/list", async (req, res) => {
       th, td { padding: 8px 12px; border-bottom: 1px solid #ddd; text-align:left; }
       th { background:#e0f0ff; cursor:pointer; }
       tr:hover { background:#f1f5f9; }
-      #filter { margin-bottom: 15px; padding: 6px 8px; width: 250px; }
+      #filter, #newId, #apiKey { margin-right: 10px; padding: 6px 8px; }
+      #filter { width: 250px; }
+      .form-row { margin-bottom: 20px; }
+      button { padding: 6px 12px; border-radius: 4px; border: none; cursor: pointer; }
+      #addBtn { background:#22c55e; color:white; }
+      #addBtn:hover { background:#16a34a; }
+      .error { color:red; margin-top:10px; }
     </style>
   </head>
   <body>
     <h1>Список добавленных ID</h1>
+    
+    <div class="form-row">
+      <input id="newId" type="text" placeholder="Введите новый ID">
+      <input id="apiKey" type="text" placeholder="Введите ваш API ключ">
+      <button id="addBtn">Добавить</button>
+      <div class="error" id="errorMsg"></div>
+    </div>
+
     <input id="filter" type="text" placeholder="Фильтр по ID или пользователю">
+
     <table id="idTable">
       <thead>
         <tr>
@@ -150,6 +151,7 @@ app.get("/list", async (req, res) => {
       </thead>
       <tbody></tbody>
     </table>
+
     <script>
       async function loadData() {
         const res = await fetch("/api/list-full");
@@ -177,6 +179,35 @@ app.get("/list", async (req, res) => {
 
       document.getElementById("filter").addEventListener("input", loadData);
 
+      // Добавление нового ID вручную
+      document.getElementById("addBtn").addEventListener("click", async () => {
+        const id = document.getElementById("newId").value.trim();
+        const apiKey = document.getElementById("apiKey").value.trim();
+        const errBox = document.getElementById("errorMsg");
+        errBox.textContent = "";
+
+        if (!id || !apiKey) {
+          errBox.textContent = "Введите ID и API ключ!";
+          return;
+        }
+
+        const res = await fetch("/api/add-id", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id, apiKey })
+        });
+
+        const data = await res.json();
+        if (!data.success) {
+          errBox.textContent = data.error || "Ошибка при добавлении ID";
+          return;
+        }
+
+        document.getElementById("newId").value = "";
+        loadData();
+      });
+
+      // Сортировка по клику
       document.querySelectorAll("th").forEach(th => {
         th.addEventListener("click", () => {
           const idx = th.cellIndex;

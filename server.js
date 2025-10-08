@@ -8,6 +8,9 @@ import pkg from "pg";
 import multer from "multer";
 import XLSX from "xlsx";
 import { stringify } from "csv-stringify/sync";
+import dotenv from "dotenv";
+dotenv.config();
+
 
 const { Pool } = pkg;
 
@@ -21,7 +24,7 @@ app.use(express.urlencoded({ extended: true }));
 
 const upload = multer({ dest: "uploads/" });
 const PORT = process.env.PORT || 10000;
-const MASTER_KEY = process.env.MASTER_KEY || "SUPERSECRETMASTERKEY";
+const MASTER_KEY = process.env.MASTER_KEY;
 
 // ======================================================
 // 🗝 Загрузка API-ключей (keys.json)

@@ -80,11 +80,16 @@ app.get("/api/list-full", async (req, res) => {
 // Добавление нового ID
 app.post("/api/add-id", async (req, res) => {
   try {
-    const { id, apiKey } = req.body;
+    let { id, apiKey } = req.body;
     if (!id || !apiKey)
       return res.status(400).json({ error: "ID или ключ отсутствует" });
 
+    id = id.trim();
+    apiKey = apiKey.trim();
+
     const user = KEY_MAP.get(apiKey);
+    console.log("📥 Добавление ID:", id, "| Ключ:", apiKey, "| Найден пользователь:", user);
+
     if (!user) {
       return res.status(403).json({ error: "Неверный API ключ" });
     }
@@ -98,14 +103,10 @@ app.post("/api/add-id", async (req, res) => {
 
     res.json({
       success: true,
-      entry: {
-        id,
-        added_by: user,
-        created_at: new Date().toISOString()
-      }
+      entry: { id, added_by: user, created_at: new Date().toISOString() }
     });
   } catch (e) {
-    console.error(e);
+    console.error("❌ Ошибка при добавлении:", e);
     res.status(500).json({ error: "Ошибка добавления ID" });
   }
 });

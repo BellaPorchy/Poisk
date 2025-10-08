@@ -103,6 +103,84 @@ app.get("/api/info/:id", async (req, res) => {
   }
 });
 
+// Простая страница со списком ID
+app.get("/list", async (req, res) => {
+  res.send(`
+  <!doctype html>
+  <html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <title>Список добавленных ID</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 40px; background:#f8fafc; color:#111; }
+      h1 { font-size: 22px; margin-bottom: 20px; }
+      table { border-collapse: collapse; width: 100%; background:white; box-shadow:0 1px 4px rgba(0,0,0,0.1); }
+      th, td { padding: 8px 12px; border-bottom: 1px solid #ddd; text-align:left; }
+      th { background:#e0f0ff; cursor:pointer; }
+      tr:hover { background:#f1f5f9; }
+      #filter { margin-bottom: 15px; padding: 6px 8px; width: 250px; }
+    </style>
+  </head>
+  <body>
+    <h1>Список добавленных ID</h1>
+    <input id="filter" type="text" placeholder="Фильтр по ID или пользователю">
+    <table id="idTable">
+      <thead>
+        <tr>
+          <th data-field="id">ID</th>
+          <th data-field="added_by">Добавил</th>
+          <th data-field="created_at">Когда</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <script>
+      async function loadData() {
+        const res = await fetch("/api/list-full");
+        const data = await res.json();
+        renderTable(data.items);
+      }
+
+      function renderTable(items) {
+        const filter = document.getElementById("filter").value.toLowerCase();
+        const tbody = document.querySelector("#idTable tbody");
+        tbody.innerHTML = "";
+
+        items
+          .filter(it => it.id.toLowerCase().includes(filter) || it.added_by.toLowerCase().includes(filter))
+          .forEach(it => {
+            const tr = document.createElement("tr");
+            tr.innerHTML = \`
+              <td>\${it.id}</td>
+              <td>\${it.added_by}</td>
+              <td>\${new Date(it.created_at).toLocaleString()}</td>
+            \`;
+            tbody.appendChild(tr);
+          });
+      }
+
+      document.getElementById("filter").addEventListener("input", loadData);
+
+      document.querySelectorAll("th").forEach(th => {
+        th.addEventListener("click", () => {
+          const field = th.getAttribute("data-field");
+          const rows = Array.from(document.querySelectorAll("#idTable tbody tr"));
+          const sorted = rows.sort((a,b) =>
+            a.children[th.cellIndex].textContent.localeCompare(b.children[th.cellIndex].textContent)
+          );
+          const tbody = document.querySelector("#idTable tbody");
+          tbody.innerHTML = "";
+          sorted.forEach(r => tbody.appendChild(r));
+        });
+      });
+
+      loadData();
+    </script>
+  </body>
+  </html>
+  `);
+});
+
 app.listen(process.env.PORT || 10000, () =>
   console.log("🚀 Сервер запущен и слушает порт 10000")
 );

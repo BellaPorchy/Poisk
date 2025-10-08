@@ -19,11 +19,22 @@ async function initDB() {
     CREATE TABLE IF NOT EXISTS ids (
       id TEXT PRIMARY KEY,
       added_by TEXT,
-      note TEXT DEFAULT '',
       created_at TIMESTAMP DEFAULT NOW()
     );
   `);
-  console.log("✅ Таблица проверена / создана (с полем note)");
+
+  // Добавляем колонку note, если её нет
+  const check = await pool.query(`
+    SELECT column_name FROM information_schema.columns 
+    WHERE table_name='ids' AND column_name='note';
+  `);
+
+  if (check.rows.length === 0) {
+    console.log("🛠 Добавляем недостающее поле note...");
+    await pool.query("ALTER TABLE ids ADD COLUMN note TEXT DEFAULT '';");
+  }
+
+  console.log("✅ Таблица проверена / обновлена (есть поле note)");
 }
 
 // ===================== КЛЮЧИ =====================

@@ -19,10 +19,11 @@ async function initDB() {
     CREATE TABLE IF NOT EXISTS ids (
       id TEXT PRIMARY KEY,
       added_by TEXT,
+      note TEXT DEFAULT '',
       created_at TIMESTAMP DEFAULT NOW()
     );
   `);
-  console.log("✅ Таблица проверена / создана");
+  console.log("✅ Таблица проверена / создана (с полем note)");
 }
 
 // ===================== КЛЮЧИ =====================
@@ -41,15 +42,7 @@ function loadKeys() {
   }
 }
 
-// Загружаем ключи при старте
 loadKeys();
-
-console.log("🔑 Загруженные ключи:");
-for (const [k, v] of KEY_MAP.entries()) {
-  console.log("  →", v, "=", k);
-}
-
-// Автообновление keys.json без перезапуска
 fs.watchFile(KEYS_FILE, () => {
   console.log("♻️ Файл keys.json изменён — перезагружаем ключи...");
   loadKeys();
@@ -57,27 +50,17 @@ fs.watchFile(KEYS_FILE, () => {
 
 // ===================== API =====================
 
-// Список ID для подсветки
-app.get("/api/highlight-list", async (req, res) => {
-  try {
-    const result = await pool.query("SELECT id FROM ids");
-    res.json({ ids: result.rows.map(r => r.id) });
-  } catch (e) {
-    res.status(500).json({ error: "Ошибка получения данных" });
-  }
-});
-
-// Полный список ID
+// Получить список ID
 app.get("/api/list-full", async (req, res) => {
   try {
     const result = await pool.query("SELECT * FROM ids ORDER BY created_at DESC");
     res.json({ items: result.rows });
   } catch (e) {
-    res.status(500).json({ error: "Ошибка получения полного списка" });
+    res.status(500).json({ error: "Ошибка получения списка" });
   }
 });
 
-// Добавление нового ID
+// Добавить новый ID
 app.post("/api/add-id", async (req, res) => {
   try {
     let { id, apiKey } = req.body;
@@ -88,11 +71,9 @@ app.post("/api/add-id", async (req, res) => {
     apiKey = apiKey.trim();
 
     const user = KEY_MAP.get(apiKey);
-    console.log("📥 Добавление ID:", id, "| Ключ:", apiKey, "| Найден пользователь:", user);
+    console.log("📥 Добавление ID:", id, "| Ключ:", apiKey, "| Пользователь:", user);
 
-    if (!user) {
-      return res.status(403).json({ error: "Неверный API ключ" });
-    }
+    if (!user) return res.status(403).json({ error: "Неверный API ключ" });
 
     await pool.query(
       `INSERT INTO ids (id, added_by)
@@ -101,13 +82,35 @@ app.post("/api/add-id", async (req, res) => {
       [id, user]
     );
 
-    res.json({
-      success: true,
-      entry: { id, added_by: user, created_at: new Date().toISOString() }
-    });
+    res.json({ success: true });
   } catch (e) {
-    console.error("❌ Ошибка при добавлении:", e);
+    console.error(e);
     res.status(500).json({ error: "Ошибка добавления ID" });
+  }
+});
+
+// Удалить ID
+app.delete("/api/delete/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    await pool.query("DELETE FROM ids WHERE id = $1", [id]);
+    res.json({ success: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Ошибка удаления ID" });
+  }
+});
+
+// Добавить / изменить заметку
+app.post("/api/note/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { note } = req.body;
+    await pool.query("UPDATE ids SET note = $1 WHERE id = $2", [note, id]);
+    res.json({ success: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Ошибка обновления заметки" });
   }
 });
 
@@ -132,6 +135,11 @@ app.get("/", async (req, res) => {
       button { padding: 6px 12px; border-radius: 4px; border: none; cursor: pointer; }
       #addBtn { background:#22c55e; color:white; }
       #addBtn:hover { background:#16a34a; }
+      .btn-del { background:#ef4444; color:white; }
+      .btn-del:hover { background:#dc2626; }
+      .btn-note { background:#3b82f6; color:white; }
+      .btn-note:hover { background:#2563eb; }
+      .note { color:#444; font-style:italic; }
       .error { color:red; margin-top:10px; }
     </style>
   </head>
@@ -145,14 +153,16 @@ app.get("/", async (req, res) => {
       <div class="error" id="errorMsg"></div>
     </div>
 
-    <input id="filter" type="text" placeholder="Фильтр по ID или пользователю">
+    <input id="filter" type="text" placeholder="Фильтр по ID, пользователю или заметке">
 
     <table id="idTable">
       <thead>
         <tr>
-          <th data-field="id">ID</th>
-          <th data-field="added_by">Добавил</th>
-          <th data-field="created_at">Когда</th>
+          <th>ID</th>
+          <th>Добавил</th>
+          <th>Заметка</th>
+          <th>Когда</th>
+          <th>Действия</th>
         </tr>
       </thead>
       <tbody></tbody>
@@ -171,13 +181,22 @@ app.get("/", async (req, res) => {
         tbody.innerHTML = "";
 
         items
-          .filter(it => it.id.toLowerCase().includes(filter) || it.added_by.toLowerCase().includes(filter))
+          .filter(it =>
+            it.id.toLowerCase().includes(filter) ||
+            it.added_by.toLowerCase().includes(filter) ||
+            (it.note && it.note.toLowerCase().includes(filter))
+          )
           .forEach(it => {
             const tr = document.createElement("tr");
             tr.innerHTML = \`
               <td>\${it.id}</td>
               <td>\${it.added_by}</td>
+              <td class="note">\${it.note || ""}</td>
               <td>\${new Date(it.created_at).toLocaleString()}</td>
+              <td>
+                <button class="btn-note" onclick="editNote('\${it.id}', '\${it.note || ""}')">✏️</button>
+                <button class="btn-del" onclick="deleteID('\${it.id}')">🗑</button>
+              </td>
             \`;
             tbody.appendChild(tr);
           });
@@ -185,7 +204,6 @@ app.get("/", async (req, res) => {
 
       document.getElementById("filter").addEventListener("input", loadData);
 
-      // Добавление нового ID вручную
       document.getElementById("addBtn").addEventListener("click", async () => {
         const id = document.getElementById("newId").value.trim();
         const apiKey = document.getElementById("apiKey").value.trim();
@@ -213,19 +231,22 @@ app.get("/", async (req, res) => {
         loadData();
       });
 
-      // Сортировка по клику
-      document.querySelectorAll("th").forEach(th => {
-        th.addEventListener("click", () => {
-          const idx = th.cellIndex;
-          const tbody = document.querySelector("#idTable tbody");
-          const rows = Array.from(tbody.querySelectorAll("tr"));
-          rows.sort((a, b) =>
-            a.children[idx].textContent.localeCompare(b.children[idx].textContent)
-          );
-          tbody.innerHTML = "";
-          rows.forEach(r => tbody.appendChild(r));
+      async function deleteID(id) {
+        if (!confirm("Удалить ID " + id + "?")) return;
+        await fetch("/api/delete/" + id, { method: "DELETE" });
+        loadData();
+      }
+
+      async function editNote(id, currentNote) {
+        const newNote = prompt("Введите заметку для " + id + ":", currentNote);
+        if (newNote === null) return;
+        await fetch("/api/note/" + id, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ note: newNote })
         });
-      });
+        loadData();
+      }
 
       loadData();
     </script>

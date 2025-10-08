@@ -1,106 +1,86 @@
 import express from "express";
 import cors from "cors";
-import fs from "fs";
-import dotenv from "dotenv";
+import pkg from "pg";
 
-dotenv.config();
-
+const { Pool } = pkg;
 const app = express();
-const PORT = process.env.PORT || 3000;
-
 app.use(cors());
 app.use(express.json());
-app.use(express.static("public"));
 
-const DATA_FILE = "./ids.json";
-const KEYS_FILE = "./keys.json";
-const MASTER_KEY = process.env.MASTER_KEY;
+// Подключение к БД
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL || "postgres://user:pass@host:5432/dbname",
+  ssl: { rejectUnauthorized: false },
+});
 
-// === Универсальные функции чтения/записи ===
-function readJSON(file, fallback) {
+// Инициализация таблицы, если её нет
+async function initDB() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ids (
+      id TEXT PRIMARY KEY,
+      added_by TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+  console.log("✅ Таблица проверена / создана");
+}
+initDB();
+
+// Получить все ID
+app.get("/api/highlight-list", async (req, res) => {
   try {
-    return JSON.parse(fs.readFileSync(file, "utf-8"));
-  } catch {
-    return fallback;
+    const result = await pool.query("SELECT id FROM ids");
+    const ids = result.rows.map(r => r.id);
+    res.json({ ids });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Ошибка получения данных" });
   }
-}
-function writeJSON(file, data) {
-  fs.writeFileSync(file, JSON.stringify(data, null, 2));
-}
-
-// === Получить список ID ===
-app.get("/api/highlight-list", (req, res) => {
-  const data = readJSON(DATA_FILE, { entries: [] });
-  const ids = data.entries.map(e => e.id);
-  res.json({ ids, entries: data.entries });
 });
 
-// === Добавить ID ===
-app.post("/api/add-id", (req, res) => {
-  const { id, apiKey } = req.body;
-  if (!id || !apiKey) return res.status(400).json({ error: "Нужно указать id и apiKey" });
+// Добавить новый ID
+app.post("/api/add-id", async (req, res) => {
+  try {
+    const { id, apiKey } = req.body;
+    if (!id || !apiKey) {
+      return res.status(400).json({ error: "ID или API-ключ отсутствует" });
+    }
 
-  const keyData = readJSON(KEYS_FILE, { keys: [] });
-  const match = keyData.keys.find(k => k.key === apiKey);
-  if (!match) return res.status(403).json({ error: "Неверный API ключ" });
+    await pool.query(
+      `INSERT INTO ids (id, added_by) 
+       VALUES ($1, $2) 
+       ON CONFLICT (id) DO NOTHING`,
+      [id, apiKey]
+    );
 
-  const data = readJSON(DATA_FILE, { entries: [] });
-  if (data.entries.some(e => e.id === id)) return res.status(409).json({ message: "Такой ID уже есть" });
-
-  const entry = { id, user: match.user, addedAt: new Date().toISOString() };
-  data.entries.push(entry);
-  writeJSON(DATA_FILE, data);
-
-  console.log(`✅ ${match.user} добавил ID: ${id}`);
-  res.json({ message: "ID добавлен", entry });
+    res.json({ success: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Ошибка добавления ID" });
+  }
 });
 
-
-// === 🛡️ Админ-эндпоинты ===
-
-// Проверка ключа
-function isAdmin(req) {
-  return req.headers["x-admin-key"] === MASTER_KEY;
-}
-
-// Получить все ключи
-app.get("/api/keys", (req, res) => {
-  if (!isAdmin(req)) return res.status(403).json({ error: "Нет доступа" });
-  const keys = readJSON(KEYS_FILE, { keys: [] });
-  res.json(keys);
+// Получить информацию по конкретному ID
+app.get("/api/info/:id", async (req, res) => {
+  try {
+    const result = await pool.query(
+      "SELECT * FROM ids WHERE id = $1",
+      [req.params.id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Не найдено" });
+    }
+    res.json(result.rows[0]);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Ошибка запроса" });
+  }
 });
 
-// Добавить ключ
-app.post("/api/keys", (req, res) => {
-  if (!isAdmin(req)) return res.status(403).json({ error: "Нет доступа" });
-
-  const { key, user } = req.body;
-  if (!key || !user) return res.status(400).json({ error: "Нужно указать key и user" });
-
-  const data = readJSON(KEYS_FILE, { keys: [] });
-  if (data.keys.some(k => k.key === key))
-    return res.status(409).json({ error: "Такой ключ уже существует" });
-
-  data.keys.push({ key, user });
-  writeJSON(KEYS_FILE, data);
-  res.json({ message: "Ключ добавлен", key, user });
+app.get("/", (req, res) => {
+  res.send("✅ ID API работает");
 });
 
-// Удалить ключ
-app.delete("/api/keys/:key", (req, res) => {
-  if (!isAdmin(req)) return res.status(403).json({ error: "Нет доступа" });
-
-  const keyToDelete = req.params.key;
-  let data = readJSON(KEYS_FILE, { keys: [] });
-  const before = data.keys.length;
-  data.keys = data.keys.filter(k => k.key !== keyToDelete);
-  writeJSON(KEYS_FILE, data);
-
-  res.json({
-    message: before === data.keys.length ? "Ключ не найден" : "Ключ удалён",
-  });
-});
-
-app.listen(PORT, () => {
-  console.log(`✅ Сервер запущен на http://localhost:${PORT}`);
+app.listen(process.env.PORT || 10000, () => {
+  console.log("🚀 Сервер запущен на порту 10000");
 });

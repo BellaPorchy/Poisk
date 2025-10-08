@@ -118,129 +118,147 @@ app.get("/", async (req, res) => {
       <tbody id="tbody"></tbody>
     </table>
 
-    <script>
-      function getMasterKey() {
-        return localStorage.getItem("master_key");
-      }
-      function requestMasterKey() {
-        const existing = getMasterKey();
-        const key = prompt(existing ? "Введите новый мастер-ключ (или оставьте пустым):" : "Введите мастер-ключ:");
-        if (key) localStorage.setItem("master_key", key);
-      }
+<script>
+  const selected = new Set();
 
-      async function loadData() {
-        try {
-          const res = await fetch("/api/list-full");
-          const data = await res.json();
-          const tbody = document.getElementById("tbody");
-          const filter = document.getElementById("filter").value.toLowerCase();
-          tbody.innerHTML = "";
+  function getMasterKey() {
+    return localStorage.getItem("master_key");
+  }
+  function requestMasterKey() {
+    const existing = getMasterKey();
+    const key = prompt(existing ? "Введите новый мастер-ключ (или оставьте пустым):" : "Введите мастер-ключ:");
+    if (key) localStorage.setItem("master_key", key);
+  }
 
-          data.items
-            .filter(x => x.id.toLowerCase().includes(filter) || x.added_by.toLowerCase().includes(filter))
-            .forEach(x => {
-              const tr = document.createElement("tr");
-              tr.innerHTML = \`
-                <td><input type="checkbox" class="chk" data-id="\${x.id}"></td>
-                <td>\${x.id}</td>
-                <td>\${x.added_by}</td>
-                <td>\${new Date(x.created_at).toLocaleString()}</td>
-                <td>
-                  <textarea data-id="\${x.id}" class="note">\${x.note || ""}</textarea>
-                </td>
-              \`;
-              tbody.appendChild(tr);
-            });
+  async function loadData() {
+    try {
+      const res = await fetch("/api/list-full");
+      const data = await res.json();
+      const tbody = document.getElementById("tbody");
+      const filter = document.getElementById("filter").value.toLowerCase();
+      tbody.innerHTML = "";
 
-          document.querySelectorAll(".note").forEach(el => {
-            el.addEventListener("change", async () => {
-              const key = getMasterKey();
-              if (!key) return alert("Введите мастер-ключ перед изменением заметок");
-              const id = el.dataset.id;
-              const note = el.value.trim();
-              const res = await fetch("/api/update-note", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ id, note, masterKey: key })
-              });
-              const r = await res.json();
-              if (!r.success) alert("Ошибка сохранения заметки: " + r.error);
-            });
-          });
-        } catch (err) {
-          console.error("Ошибка загрузки:", err);
-        }
-      }
-
-      async function deleteSelected() {
-        const key = getMasterKey();
-        if (!key) return alert("Введите мастер-ключ");
-        const ids = Array.from(document.querySelectorAll(".chk:checked")).map(c => c.dataset.id);
-        if (ids.length === 0) return alert("Выберите хотя бы один ID");
-        if (!confirm("Удалить выбранные?")) return;
-        for (const id of ids) {
-          await fetch("/api/delete", {
-            method:"POST",
-            headers:{ "Content-Type":"application/json" },
-            body: JSON.stringify({ id, masterKey: key })
-          });
-        }
-        loadData();
-      }
-
-      async function addManual() {
-        const key = getMasterKey();
-        if (!key) return alert("Введите мастер-ключ");
-        const id = prompt("Введите новый ID:");
-        if (!id) return;
-        const res = await fetch("/api/add-id", {
-          method:"POST",
-          headers:{ "Content-Type":"application/json" },
-          body: JSON.stringify({ id, apiKey:key })
+      data.items
+        .filter(x => x.id.toLowerCase().includes(filter) || x.added_by.toLowerCase().includes(filter))
+        .forEach(x => {
+          const tr = document.createElement("tr");
+          const checked = selected.has(x.id) ? "checked" : "";
+          tr.innerHTML = `
+            <td><input type="checkbox" class="chk" data-id="${x.id}" ${checked}></td>
+            <td>${x.id}</td>
+            <td>${x.added_by}</td>
+            <td>${new Date(x.created_at).toLocaleString()}</td>
+            <td>
+              <textarea data-id="${x.id}" class="note">${x.note || ""}</textarea>
+            </td>
+          `;
+          tbody.appendChild(tr);
         });
-        const r = await res.json();
-        if (!r.success) alert("Ошибка добавления: " + r.error);
-        loadData();
-      }
 
-      async function exportIDs() {
-        const res = await fetch("/api/list-full");
-        const data = await res.json();
-        const blob = new Blob([JSON.stringify(data.items, null, 2)], {type:"application/json"});
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = "ids_export.json";
-        a.click();
-      }
+      // Сохраняем состояние выбранных чекбоксов
+      document.querySelectorAll(".chk").forEach(chk => {
+        chk.addEventListener("change", () => {
+          if (chk.checked) selected.add(chk.dataset.id);
+          else selected.delete(chk.dataset.id);
+        });
+      });
 
-      async function importIDs(file) {
-        const key = getMasterKey();
-        if (!key) return alert("Введите мастер-ключ");
-        const formData = new FormData();
-        formData.append("file", file);
-        formData.append("masterKey", key);
-        const res = await fetch("/api/import", { method:"POST", body:formData });
-        const data = await res.json();
-        if (data.success) alert("Импортировано: " + data.imported);
-        else alert("Ошибка импорта: " + data.error);
-        loadData();
-      }
+      // Заметки
+      document.querySelectorAll(".note").forEach(el => {
+        el.addEventListener("change", async () => {
+          const key = getMasterKey();
+          if (!key) return alert("Введите мастер-ключ перед изменением заметок");
+          const id = el.dataset.id;
+          const note = el.value.trim();
+          const res = await fetch("/api/update-note", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id, note, masterKey: key })
+          });
+          const r = await res.json();
+          if (!r.success) alert("Ошибка сохранения заметки: " + r.error);
+        });
+      });
 
-      // Обработчики
-      document.getElementById("refreshBtn").onclick = loadData;
-      document.getElementById("filter").oninput = loadData;
-      document.getElementById("deleteBtn").onclick = deleteSelected;
-      document.getElementById("addBtn").onclick = addManual;
-      document.getElementById("exportBtn").onclick = exportIDs;
-      document.getElementById("importBtn").onclick = () => document.getElementById("importFile").click();
-      document.getElementById("importFile").onchange = e => importIDs(e.target.files[0]);
-      document.getElementById("keyBtn").onclick = requestMasterKey;
+      // Обновляем статус
+      const now = new Date().toLocaleTimeString();
+      document.getElementById("status").textContent = "🕓 Обновлено: " + now;
+    } catch (err) {
+      console.error("Ошибка загрузки:", err);
+      document.getElementById("status").textContent = "⚠️ Ошибка обновления";
+    }
+  }
 
-      // 🔁 Автоматическое обновление каждые 2 секунды
-      loadData();
-      setInterval(loadData, 2000);
-    </script>
+  async function deleteSelected() {
+    const key = getMasterKey();
+    if (!key) return alert("Введите мастер-ключ");
+    const ids = Array.from(selected);
+    if (ids.length === 0) return alert("Выберите хотя бы один ID");
+    if (!confirm("Удалить выбранные?")) return;
+    for (const id of ids) {
+      await fetch("/api/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, masterKey: key })
+      });
+      selected.delete(id);
+    }
+    loadData();
+  }
+
+  async function addManual() {
+    const key = getMasterKey();
+    if (!key) return alert("Введите мастер-ключ");
+    const id = prompt("Введите новый ID:");
+    if (!id) return;
+    const res = await fetch("/api/add-id", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, apiKey: key })
+    });
+    const r = await res.json();
+    if (!r.success) alert("Ошибка добавления: " + r.error);
+    loadData();
+  }
+
+  async function exportIDs() {
+    const res = await fetch("/api/list-full");
+    const data = await res.json();
+    const blob = new Blob([JSON.stringify(data.items, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "ids_export.json";
+    a.click();
+  }
+
+  async function importIDs(file) {
+    const key = getMasterKey();
+    if (!key) return alert("Введите мастер-ключ");
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("masterKey", key);
+    const res = await fetch("/api/import", { method: "POST", body: formData });
+    const data = await res.json();
+    if (data.success) alert("Импортировано: " + data.imported);
+    else alert("Ошибка импорта: " + data.error);
+    loadData();
+  }
+
+  // Обработчики
+  document.getElementById("refreshBtn").onclick = loadData;
+  document.getElementById("filter").oninput = loadData;
+  document.getElementById("deleteBtn").onclick = deleteSelected;
+  document.getElementById("addBtn").onclick = addManual;
+  document.getElementById("exportBtn").onclick = exportIDs;
+  document.getElementById("importBtn").onclick = () => document.getElementById("importFile").click();
+  document.getElementById("importFile").onchange = e => importIDs(e.target.files[0]);
+  document.getElementById("keyBtn").onclick = requestMasterKey;
+
+  // 🔁 Автоматическое обновление каждые 2 секунды
+  loadData();
+  setInterval(loadData, 2000);
+</script>
   </body>
   </html>
   `);

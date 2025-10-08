@@ -103,6 +103,21 @@ app.get("/api/info/:id", async (req, res) => {
   }
 });
 
+
+// --- Новый маршрут: полный список для клиента и страницы /list ---
+app.get("/api/list-full", async (req, res) => {
+  try {
+    const result = await pool.query(
+      "SELECT id, added_by, created_at FROM ids ORDER BY created_at DESC"
+    );
+    res.json({ items: result.rows }); // <- клиент ждёт именно { items: [...] }
+  } catch (e) {
+    console.error("Ошибка при получении списка:", e);
+    res.status(500).json({ error: "Ошибка при получении списка ID" });
+  }
+});
+
+
 // Простая страница со списком ID
 app.get("/list", async (req, res) => {
   res.send(`

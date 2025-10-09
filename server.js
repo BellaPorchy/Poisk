@@ -1,6 +1,5 @@
 import express from "express";
 import cors from "cors";
-import fs from "fs";
 import pkg from "pg";
 import multer from "multer";
 import dotenv from "dotenv";
@@ -54,11 +53,8 @@ const findUserByKey = (key) => {
   return found ? found.user : key;
 };
 
-// === API ===
-
-// Проверка доступности
+// === ГЛАВНАЯ СТРАНИЦА ===
 app.get("/", async (req, res) => {
-  const data = await pool.query("SELECT * FROM ids ORDER BY created_at DESC");
   res.send(`
 <!DOCTYPE html>
 <html lang="ru">
@@ -68,7 +64,7 @@ app.get("/", async (req, res) => {
 <style>
   body { font-family: system-ui, sans-serif; background:#f8fafc; padding:20px; color:#111; }
   table { width:100%; border-collapse:collapse; background:white; box-shadow:0 1px 3px rgba(0,0,0,0.1); }
-  th, td { padding:6px 8px; border-bottom:1px solid #ddd; }
+  th, td { padding:4px 6px; border-bottom:1px solid #ddd; }
   th { background:#e0f0ff; text-align:left; }
   tr:hover { background:#f1f5f9; }
   input[type="text"] { padding:6px; width:250px; margin-bottom:10px; }
@@ -76,6 +72,20 @@ app.get("/", async (req, res) => {
   button:hover { background:#e5f0ff; }
   textarea { width:100%; height:40px; }
   .note { font-size:12px; color:#444; }
+  #toast {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    background: #22c55e;
+    color: white;
+    padding: 10px 16px;
+    border-radius: 8px;
+    opacity: 0;
+    transition: opacity 0.5s;
+    pointer-events: none;
+    font-size: 14px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.15);
+  }
 </style>
 </head>
 <body>
@@ -101,10 +111,20 @@ app.get("/", async (req, res) => {
     <tbody></tbody>
   </table>
 
+  <div id="toast"></div>
+
 <script>
 let selected = new Set();
 const MASTER_KEY = localStorage.getItem("master_key") || prompt("Введите мастер ключ:");
 if (MASTER_KEY) localStorage.setItem("master_key", MASTER_KEY);
+
+function showToast(text, color="#22c55e") {
+  const t = document.getElementById("toast");
+  t.style.background = color;
+  t.textContent = text;
+  t.style.opacity = "1";
+  setTimeout(() => (t.style.opacity = "0"), 2500);
+}
 
 document.getElementById("filter").addEventListener("input", render);
 
@@ -112,17 +132,22 @@ async function load() {
   const res = await fetch("/api/list-full");
   const data = await res.json();
   window.items = data.items;
-  render();
+  render(false);
 }
-function render() {
+
+function render(clearSelection = false) {
   const filter = document.getElementById("filter").value.toLowerCase();
   const tbody = document.querySelector("#idTable tbody");
+  const prevSelected = new Set(selected);
+
+  if (clearSelection) selected.clear();
+
   tbody.innerHTML = "";
   (window.items||[])
     .filter(x => x.id.toLowerCase().includes(filter) || x.added_by.toLowerCase().includes(filter))
     .forEach(x => {
       const tr = document.createElement("tr");
-      const checked = selected.has(x.id) ? "checked" : "";
+      const checked = prevSelected.has(x.id) ? "checked" : "";
       tr.innerHTML = \`
         <td><input type="checkbox" class="chk" data-id="\${x.id}" \${checked}></td>
         <td>\${x.id}</td>
@@ -132,6 +157,7 @@ function render() {
       \`;
       tbody.appendChild(tr);
     });
+
   document.querySelectorAll(".chk").forEach(c =>
     c.addEventListener("change", e => {
       const id = e.target.dataset.id;
@@ -139,28 +165,34 @@ function render() {
       else selected.delete(id);
     })
   );
+
   document.querySelectorAll("textarea").forEach(a =>
     a.addEventListener("change", async e => {
       const id = e.target.dataset.id;
       const note = e.target.value;
-      await fetch("/api/note", {
+      const r = await fetch("/api/note", {
         method:"POST",
         headers:{"Content-Type":"application/json"},
         body:JSON.stringify({ id, note, masterKey: MASTER_KEY })
       });
+      if (r.ok) showToast("💾 Заметка сохранена");
+      else showToast("❌ Ошибка сохранения", "#ef4444");
     })
   );
 }
 
 async function deleteSelected() {
   if (!confirm("Удалить выбранные?")) return;
-  await fetch("/api/delete-multiple", {
+  const r = await fetch("/api/delete-multiple", {
     method:"POST",
     headers:{"Content-Type":"application/json"},
     body:JSON.stringify({ ids:[...selected], masterKey: MASTER_KEY })
   });
-  selected.clear();
-  load();
+  if (r.ok) {
+    showToast("🗑️ Удалено " + selected.size);
+    selected.clear();
+    load();
+  } else showToast("❌ Ошибка удаления", "#ef4444");
 }
 
 async function exportData() {
@@ -170,6 +202,7 @@ async function exportData() {
   a.href = URL.createObjectURL(blob);
   a.download = "ids_export.json";
   a.click();
+  showToast("📤 Экспорт выполнен");
 }
 
 document.getElementById("importFile").addEventListener("change", async e => {
@@ -178,7 +211,10 @@ document.getElementById("importFile").addEventListener("change", async e => {
   const formData = new FormData();
   formData.append("file", file);
   formData.append("masterKey", MASTER_KEY);
-  await fetch("/api/import", { method:"POST", body:formData });
+  const r = await fetch("/api/import", { method:"POST", body:formData });
+  const data = await r.json();
+  if (r.ok) showToast("📥 Импортировано " + (data.count || 0) + " ID");
+  else showToast("❌ Ошибка импорта", "#ef4444");
   load();
 });
 
@@ -191,13 +227,12 @@ load();
 `);
 });
 
-// === API: данные ===
+// === API ===
 app.get("/api/list-full", async (req, res) => {
   const q = await pool.query("SELECT * FROM ids ORDER BY created_at DESC");
   res.json({ items: q.rows });
 });
 
-// Добавить ID (для расширения)
 app.post("/api/add-id", async (req, res) => {
   const { id, apiKey } = req.body;
   if (!id || !apiKey) return res.status(400).json({ error: "Неверные данные" });
@@ -209,7 +244,6 @@ app.post("/api/add-id", async (req, res) => {
   res.json({ success: true });
 });
 
-// Обновить заметку
 app.post("/api/note", async (req, res) => {
   const { id, note, masterKey } = req.body;
   if (masterKey !== MASTER_KEY) return res.status(403).json({ error: "Нет доступа" });
@@ -217,7 +251,6 @@ app.post("/api/note", async (req, res) => {
   res.json({ success: true });
 });
 
-// Удалить несколько
 app.post("/api/delete-multiple", async (req, res) => {
   const { ids, masterKey } = req.body;
   if (masterKey !== MASTER_KEY) return res.status(403).json({ error: "Нет доступа" });
@@ -225,26 +258,47 @@ app.post("/api/delete-multiple", async (req, res) => {
   res.json({ success: true });
 });
 
-// Экспорт
 app.get("/api/export", async (req, res) => {
   const q = await pool.query("SELECT * FROM ids");
   res.setHeader("Content-Disposition", "attachment; filename=ids_export.json");
-  res.json(q.rows);
+  res.json({ items: q.rows });
 });
 
-// Импорт
 app.post("/api/import", upload.single("file"), async (req, res) => {
-  const { masterKey } = req.body;
-  if (masterKey !== MASTER_KEY) return res.status(403).json({ error: "Нет доступа" });
-  const fileData = JSON.parse(req.file.buffer.toString());
-  for (const row of fileData) {
-    await pool.query(
-      "INSERT INTO ids (id, added_by, note, created_at) VALUES ($1,$2,$3,$4) ON CONFLICT (id) DO NOTHING",
-      [row.id, row.added_by, row.note || "", row.created_at || new Date()]
-    );
+  try {
+    const { masterKey } = req.body;
+    if (masterKey !== MASTER_KEY)
+      return res.status(403).json({ error: "Нет доступа" });
+
+    if (!req.file) return res.status(400).json({ error: "Файл не загружен" });
+
+    const content = req.file.buffer.toString("utf8");
+    let json;
+    try {
+      json = JSON.parse(content);
+    } catch {
+      return res.status(400).json({ error: "Ошибка парсинга JSON" });
+    }
+
+    const items = Array.isArray(json) ? json : json.items;
+    if (!Array.isArray(items))
+      return res.status(400).json({ error: "Неверный формат файла" });
+
+    for (const row of items) {
+      await pool.query(
+        "INSERT INTO ids (id, added_by, note, created_at) VALUES ($1,$2,$3,$4) ON CONFLICT (id) DO NOTHING",
+        [row.id, row.added_by, row.note || "", row.created_at || new Date()]
+      );
+    }
+
+    res.json({ success: true, count: items.length });
+  } catch (err) {
+    console.error("❌ Ошибка импорта:", err);
+    res.status(500).json({ error: "Ошибка на сервере" });
   }
-  res.json({ success: true });
 });
 
 // === ЗАПУСК ===
-app.listen(process.env.PORT || 10000, () => console.log("🚀 Сервер запущен"));
+app.listen(process.env.PORT || 10000, () =>
+  console.log("🚀 Сервер запущен")
+);

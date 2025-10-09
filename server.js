@@ -114,9 +114,12 @@ app.get("/", async (req, res) => {
   <div id="toast"></div>
 
 <script>
+/* 
+  ВАЖНО: теперь мастеркей НЕ запрашивается автоматически при заходе на страницу.
+  Запрос появится только при попытке выполнить защищённое действие.
+*/
+
 let selected = new Set();
-const MASTER_KEY = localStorage.getItem("master_key") || prompt("Введите мастер ключ:");
-if (MASTER_KEY) localStorage.setItem("master_key", MASTER_KEY);
 
 function showToast(text, color="#22c55e") {
   const t = document.getElementById("toast");
@@ -126,13 +129,33 @@ function showToast(text, color="#22c55e") {
   setTimeout(() => (t.style.opacity = "0"), 2500);
 }
 
+function getMasterKeyOrAsk() {
+  // пытаемся взять из localStorage
+  let k = localStorage.getItem("master_key");
+  if (k && k.trim()) return k.trim();
+
+  // спрашиваем один раз и сохраняем
+  const entered = prompt("Введите мастер-ключ (требуется для админ-действий):");
+  if (entered && entered.trim()) {
+    localStorage.setItem("master_key", entered.trim());
+    return entered.trim();
+  }
+  return null;
+}
+
 document.getElementById("filter").addEventListener("input", render);
 
+// загрузка данных и рендер (автообновление)
 async function load() {
-  const res = await fetch("/api/list-full");
-  const data = await res.json();
-  window.items = data.items;
-  render(false);
+  try {
+    const res = await fetch("/api/list-full");
+    const data = await res.json();
+    window.items = data.items;
+    render(false);
+  } catch (err) {
+    console.error("Ошибка загрузки списка:", err);
+    showToast("⚠️ Не удалось загрузить список", "#ef4444");
+  }
 }
 
 function render(clearSelection = false) {
@@ -144,7 +167,7 @@ function render(clearSelection = false) {
 
   tbody.innerHTML = "";
   (window.items||[])
-    .filter(x => x.id.toLowerCase().includes(filter) || x.added_by.toLowerCase().includes(filter))
+    .filter(x => x.id.toLowerCase().includes(filter) || (x.added_by||"").toLowerCase().includes(filter))
     .forEach(x => {
       const tr = document.createElement("tr");
       const checked = prevSelected.has(x.id) ? "checked" : "";
@@ -158,6 +181,7 @@ function render(clearSelection = false) {
       tbody.appendChild(tr);
     });
 
+  // слушатели для чекбоксов (сохраняем выбор между перерисовками)
   document.querySelectorAll(".chk").forEach(c =>
     c.addEventListener("change", e => {
       const id = e.target.dataset.id;
@@ -166,56 +190,106 @@ function render(clearSelection = false) {
     })
   );
 
+  // слушатели для заметок — сохраняем только если есть мастеркей (пользователь будет запросен, если нет)
   document.querySelectorAll("textarea").forEach(a =>
     a.addEventListener("change", async e => {
       const id = e.target.dataset.id;
       const note = e.target.value;
-      const r = await fetch("/api/note", {
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({ id, note, masterKey: MASTER_KEY })
-      });
-      if (r.ok) showToast("💾 Заметка сохранена");
-      else showToast("❌ Ошибка сохранения", "#ef4444");
+      const masterKey = getMasterKeyOrAsk();
+      if (!masterKey) {
+        showToast("❗ Мастер-ключ не указан — заметка не сохранена", "#ef4444");
+        // перезагрузим содержимое заметки из серверных данных, чтобы не вводить ложное чувство что сохранено
+        load();
+        return;
+      }
+      try {
+        const r = await fetch("/api/note", {
+          method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({ id, note, masterKey })
+        });
+        const j = await r.json();
+        if (r.ok && j.success) showToast("💾 Заметка сохранена");
+        else {
+          showToast("❌ Ошибка сохранения", "#ef4444");
+        }
+      } catch (err) {
+        console.error(err);
+        showToast("❌ Ошибка сохранения", "#ef4444");
+      }
     })
   );
 }
 
 async function deleteSelected() {
-  if (!confirm("Удалить выбранные?")) return;
-  const r = await fetch("/api/delete-multiple", {
-    method:"POST",
-    headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({ ids:[...selected], masterKey: MASTER_KEY })
-  });
-  if (r.ok) {
-    showToast("🗑️ Удалено " + selected.size);
-    selected.clear();
-    load();
-  } else showToast("❌ Ошибка удаления", "#ef4444");
+  const ids = [...selected];
+  if (ids.length === 0) {
+    showToast("⚠️ Ничего не выбрано", "#ef4444");
+    return;
+  }
+  if (!confirm(\`Удалить \${ids.length} записей?\`)) return;
+
+  const masterKey = getMasterKeyOrAsk();
+  if (!masterKey) { showToast("❗ Мастер-ключ не указан", "#ef4444"); return; }
+
+  try {
+    const r = await fetch("/api/delete-multiple", {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({ ids, masterKey })
+    });
+    const j = await r.json();
+    if (r.ok && j.success) {
+      showToast("🗑️ Удалено " + ids.length);
+      selected.clear();
+      load();
+    } else {
+      showToast("❌ Ошибка удаления", "#ef4444");
+    }
+  } catch (err) {
+    console.error(err);
+    showToast("❌ Ошибка удаления", "#ef4444");
+  }
 }
 
 async function exportData() {
-  const res = await fetch("/api/export");
-  const blob = await res.blob();
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = "ids_export.json";
-  a.click();
-  showToast("📤 Экспорт выполнен");
+  try {
+    const res = await fetch("/api/export");
+    const blob = await res.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "ids_export.json";
+    a.click();
+    showToast("📤 Экспорт выполнен");
+  } catch (err) {
+    console.error(err);
+    showToast("❌ Ошибка экспорта", "#ef4444");
+  }
 }
 
 document.getElementById("importFile").addEventListener("change", async e => {
   const file = e.target.files[0];
   if (!file) return;
+  const masterKey = getMasterKeyOrAsk();
+  if (!masterKey) { showToast("❗ Мастер-ключ не указан", "#ef4444"); return; }
+
   const formData = new FormData();
   formData.append("file", file);
-  formData.append("masterKey", MASTER_KEY);
-  const r = await fetch("/api/import", { method:"POST", body:formData });
-  const data = await r.json();
-  if (r.ok) showToast("📥 Импортировано " + (data.count || 0) + " ID");
-  else showToast("❌ Ошибка импорта", "#ef4444");
-  load();
+  formData.append("masterKey", masterKey);
+
+  try {
+    const r = await fetch("/api/import", { method:"POST", body:formData });
+    const j = await r.json();
+    if (r.ok && j.success) {
+      showToast("📥 Импортировано " + (j.count || 0) + " ID");
+      load();
+    } else {
+      showToast("❌ Ошибка импорта", "#ef4444");
+    }
+  } catch (err) {
+    console.error(err);
+    showToast("❌ Ошибка импорта", "#ef4444");
+  }
 });
 
 function refresh(){ load(); }

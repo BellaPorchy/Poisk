@@ -1,144 +1,218 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ID Highlight Panel</title>
-  <style>
-    body {
-      font-family: "Segoe UI", sans-serif;
-      background: #f5f9ff;
-      color: #333;
-      margin: 0;
-      padding: 20px;
-    }
-
-    h1 {
-      text-align: center;
-      color: #0055aa;
-      margin-bottom: 20px;
-    }
-
-    table {
-      border-collapse: collapse;
-      width: 100%;
-      background: white;
-      border-radius: 10px;
-      overflow: hidden;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-    }
-
-    th, td {
-      padding: 12px 15px;
-      text-align: left;
-      border-bottom: 1px solid #e6e6e6;
-    }
-
-    th {
-      background-color: #0077cc;
-      color: white;
-    }
-
-    tr:hover {
-      background-color: #f0f8ff;
-    }
-
-    #status {
-      text-align: center;
-      margin-bottom: 15px;
-      font-size: 14px;
-      color: #666;
-    }
-
-    #refresh {
-      display: inline-block;
-      margin: 0 auto 20px;
-      padding: 8px 16px;
-      font-size: 14px;
-      background-color: #0077cc;
-      color: white;
-      border: none;
-      border-radius: 6px;
-      cursor: pointer;
-    }
-
-    #refresh:hover {
-      background-color: #005fa3;
-    }
-  </style>
+<meta charset="UTF-8">
+<title>ID Manager</title>
+<style>
+  body { font-family: system-ui, sans-serif; background:#f9fafb; color:#111; margin:0; padding:0; }
+  header { background:#e3f2fd; padding:10px 20px; display:flex; justify-content:space-between; align-items:center; }
+  header h2 { margin:0; font-size:18px; }
+  header input { padding:5px; border:1px solid #ccc; border-radius:4px; }
+  main { padding:20px; max-width:1200px; margin:auto; }
+  table { width:100%; border-collapse:collapse; background:white; box-shadow:0 1px 3px rgba(0,0,0,0.1); }
+  th, td { padding:6px 8px; border-bottom:1px solid #ddd; }
+  th { background:#f1f5f9; text-align:left; }
+  tr:hover { background:#f8fafc; }
+  button { margin:4px; padding:6px 10px; border:1px solid #ccc; border-radius:4px; cursor:pointer; background:white; }
+  button:hover { background:#e0f2fe; }
+  textarea { width:100%; height:40px; resize:vertical; font-family:inherit; }
+  .controls { margin-bottom:10px; display:flex; flex-wrap:wrap; gap:5px; align-items:center; }
+  .pagination { text-align:center; margin-top:10px; }
+  .pagination button { margin:2px; }
+  .note { font-size:12px; color:#555; }
+  .hidden { display:none; }
+  #masterKeyContainer { position:fixed; top:10px; right:10px; background:#fff; padding:6px 10px; border-radius:6px; box-shadow:0 1px 3px rgba(0,0,0,0.2); font-size:13px; }
+</style>
 </head>
 <body>
-  <h1>📋 ID Highlight Panel</h1>
+<header>
+  <h2>🧩 ID Manager</h2>
+  <div id="masterKeyContainer">
+    <label>Master key:</label>
+    <input type="password" id="masterKeyInput" placeholder="Введите ключ" style="width:120px">
+  </div>
+</header>
 
-  <div id="status">Загрузка данных...</div>
-  <div style="text-align:center;">
-    <button id="refresh">🔄 Обновить</button>
+<main>
+  <div class="controls">
+    <input id="filter" placeholder="🔍 Поиск по ID или пользователю">
+    <button onclick="load()">🔄 Обновить</button>
+    <button onclick="deleteSelected()">🗑️ Удалить выбранные</button>
+    <button onclick="exportData()">📤 Экспорт</button>
+    <button onclick="document.getElementById('importFile').click()">📥 Импорт</button>
+    <button onclick="clearDB()">🔥 Очистить всё</button>
+    <button onclick="toggleManualForm()">➕ Добавить вручную</button>
+    <input type="file" id="importFile" accept=".json" style="display:none">
+  </div>
+
+  <div id="manualForm" class="hidden">
+    <input id="manualID" placeholder="ID..." />
+    <input id="manualUser" placeholder="Пользователь..." />
+    <button onclick="addManual()">Добавить</button>
   </div>
 
   <table id="idTable">
     <thead>
       <tr>
+        <th><input type="checkbox" id="selectAll"></th>
         <th>ID</th>
         <th>Добавил</th>
-        <th>Дата и время</th>
+        <th>Когда</th>
+        <th>Заметка</th>
       </tr>
     </thead>
     <tbody></tbody>
   </table>
+  <div class="pagination" id="pagination"></div>
+</main>
 
-  <script>
-    const API_URL = "/api/highlight-list";
+<script>
+let selected = new Set();
+let items = [];
+let total = 0;
+let currentPage = 1;
+const limit = 100;
+let masterKey = localStorage.getItem("masterKey") || "";
 
-    async function loadIDs() {
-      const status = document.getElementById("status");
-      const tbody = document.querySelector("#idTable tbody");
+document.getElementById("masterKeyInput").value = masterKey;
+document.getElementById("masterKeyInput").addEventListener("input", e => {
+  masterKey = e.target.value.trim();
+  localStorage.setItem("masterKey", masterKey);
+});
 
-      status.textContent = "⏳ Обновление данных...";
-      try {
-        const res = await fetch(API_URL);
-        const data = await res.json();
+document.getElementById("filter").addEventListener("input", render);
+document.getElementById("selectAll").addEventListener("change", e => {
+  if (e.target.checked) items.forEach(x => selected.add(x.id));
+  else selected.clear();
+  render();
+});
 
-        tbody.innerHTML = "";
+function toggleManualForm() {
+  document.getElementById("manualForm").classList.toggle("hidden");
+}
 
-        if (data.entries && data.entries.length > 0) {
-          const sorted = data.entries.sort(
-            (a, b) => new Date(b.addedAt) - new Date(a.addedAt)
-          );
+async function load(page = 1) {
+  currentPage = page;
+  const offset = (page - 1) * limit;
+  const res = await fetch(`/api/list-full?limit=${limit}&offset=${offset}`);
+  const data = await res.json();
+  items = data.items;
+  total = data.total;
+  render();
+}
 
-          for (const entry of sorted) {
-            const tr = document.createElement("tr");
+function render() {
+  const filter = document.getElementById("filter").value.toLowerCase();
+  const tbody = document.querySelector("#idTable tbody");
+  tbody.innerHTML = "";
+  items
+    .filter(x => x.id.toLowerCase().includes(filter) || x.added_by.toLowerCase().includes(filter))
+    .forEach(x => {
+      const tr = document.createElement("tr");
+      const checked = selected.has(x.id) ? "checked" : "";
+      tr.innerHTML = `
+        <td><input type="checkbox" class="chk" data-id="${x.id}" ${checked}></td>
+        <td>${x.id}</td>
+        <td>${x.added_by}</td>
+        <td>${new Date(x.created_at).toLocaleString()}</td>
+        <td><textarea data-id="${x.id}">${x.note || ""}</textarea></td>
+      `;
+      tbody.appendChild(tr);
+    });
+  document.querySelectorAll(".chk").forEach(c =>
+    c.addEventListener("change", e => {
+      const id = e.target.dataset.id;
+      if (e.target.checked) selected.add(id);
+      else selected.delete(id);
+    })
+  );
+  document.querySelectorAll("textarea").forEach(a =>
+    a.addEventListener("change", async e => {
+      const id = e.target.dataset.id;
+      const note = e.target.value;
+      await fetch("/api/note", {
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({ id, note, masterKey })
+      });
+    })
+  );
+  renderPagination();
+}
 
-            const tdID = document.createElement("td");
-            tdID.textContent = entry.id;
-            tdID.style.fontFamily = "monospace";
-            tdID.style.fontSize = "14px";
+function renderPagination() {
+  const totalPages = Math.ceil(total / limit);
+  const container = document.getElementById("pagination");
+  container.innerHTML = "";
+  for (let i = 1; i <= totalPages; i++) {
+    const btn = document.createElement("button");
+    btn.textContent = i;
+    if (i === currentPage) btn.style.background = "#90caf9";
+    btn.onclick = () => load(i);
+    container.appendChild(btn);
+  }
+}
 
-            const tdUser = document.createElement("td");
-            tdUser.textContent = entry.user || "—";
+async function deleteSelected() {
+  if (!masterKey) return alert("Введите мастер ключ!");
+  if (!confirm("Удалить выбранные?")) return;
+  await fetch("/api/delete-multiple", {
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({ ids:[...selected], masterKey })
+  });
+  selected.clear();
+  load(currentPage);
+}
 
-            const tdDate = document.createElement("td");
-            const date = new Date(entry.addedAt);
-            tdDate.textContent = date.toLocaleString();
+async function clearDB() {
+  if (!masterKey) return alert("Введите мастер ключ!");
+  if (!confirm("Удалить ВСЁ из базы?")) return;
+  await fetch("/api/clear", {
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({ masterKey })
+  });
+  load(1);
+}
 
-            tr.append(tdID, tdUser, tdDate);
-            tbody.append(tr);
-          }
+async function exportData() {
+  const res = await fetch("/api/export");
+  const blob = await res.blob();
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "ids_export.json";
+  a.click();
+}
 
-          status.textContent = `✅ Загружено ${data.entries.length} записей`;
-        } else {
-          status.textContent = "Пока нет данных.";
-        }
-      } catch (err) {
-        console.error(err);
-        status.textContent = "⚠️ Ошибка загрузки данных с сервера.";
-      }
-    }
+document.getElementById("importFile").addEventListener("change", async e => {
+  if (!masterKey) return alert("Введите мастер ключ!");
+  const file = e.target.files[0];
+  if (!file) return;
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("masterKey", masterKey);
+  const res = await fetch("/api/import", { method:"POST", body:formData });
+  if (!res.ok) alert("Ошибка импорта");
+  load();
+});
 
-    document.getElementById("refresh").addEventListener("click", loadIDs);
+async function addManual() {
+  const id = document.getElementById("manualID").value.trim();
+  const added_by = document.getElementById("manualUser").value.trim();
+  if (!id) return alert("Введите ID!");
+  if (!masterKey) return alert("Введите мастер ключ!");
+  await fetch("/api/add-manual", {
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({ id, added_by, masterKey })
+  });
+  document.getElementById("manualID").value = "";
+  document.getElementById("manualUser").value = "";
+  load(1);
+}
 
-    // Автообновление каждые 15 секунд
-    loadIDs();
-    setInterval(loadIDs, 5000);
-  </script>
+load();
+</script>
 </body>
 </html>

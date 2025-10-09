@@ -270,27 +270,38 @@ async function exportData() {
 document.getElementById("importFile").addEventListener("change", async e => {
   const file = e.target.files[0];
   if (!file) return;
-  const masterKey = getMasterKeyOrAsk();
-  if (!masterKey) { showToast("❗ Мастер-ключ не указан", "#ef4444"); return; }
 
+  // Проверяем наличие мастер-ключа
+  let masterKey = localStorage.getItem("master_key");
+  if (!masterKey) {
+    masterKey = prompt("Введите мастер-ключ для импорта:");
+    if (masterKey) localStorage.setItem("master_key", masterKey);
+    else {
+      alert("Импорт отменён — мастер-ключ не введён");
+      return;
+    }
+  }
+
+  // Отправляем файл
   const formData = new FormData();
   formData.append("file", file);
   formData.append("masterKey", masterKey);
 
   try {
-    const r = await fetch("/api/import", { method:"POST", body:formData });
-    const j = await r.json();
-    if (r.ok && j.success) {
-      showToast("📥 Импортировано " + (j.count || 0) + " ID");
+    const res = await fetch("/api/import", { method: "POST", body: formData });
+    const data = await res.json();
+
+    if (res.ok) {
+      alert(`✅ Импортировано ${data.imported || 0} записей`);
       load();
     } else {
-      showToast("❌ Ошибка импорта", "#ef4444");
+      alert(`❌ Ошибка импорта: ${data.error || "Неизвестная ошибка"}`);
     }
   } catch (err) {
-    console.error(err);
-    showToast("❌ Ошибка импорта", "#ef4444");
+    alert("❌ Ошибка при соединении с сервером: " + err.message);
   }
 });
+
 
 function refresh(){ load(); }
 setInterval(load, 2000);

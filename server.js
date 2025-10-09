@@ -159,5 +159,20 @@ app.get("*", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
+// === ГЛОБАЛЬНЫЙ ПОИСК ===
+app.get("/api/search", async (req, res) => {
+  const { query } = req.query;
+  if (!query || query.trim() === "") {
+    return res.json({ items: [] });
+  }
+
+  const q = await pool.query(
+    "SELECT * FROM ids WHERE id ILIKE $1 OR added_by ILIKE $1 ORDER BY created_at DESC LIMIT 500",
+    [`%${query}%`]
+  );
+
+  res.json({ items: q.rows });
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 Сервер запущен на порту ${PORT}`));

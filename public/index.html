@@ -1,47 +1,91 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-<meta charset="UTF-8" />
-<title>ID Manager</title>
-<style>
-  body { font-family: system-ui, sans-serif; background:#f8fafc; padding:20px; color:#111; }
-  table { width:100%; border-collapse:collapse; background:white; box-shadow:0 1px 3px rgba(0,0,0,0.1); }
-  th, td { padding:4px 6px; border-bottom:1px solid #ddd; font-size:13px; }
-  th { background:#e0f0ff; text-align:left; }
-  tr:hover { background:#f1f5f9; }
-  input, textarea { padding:4px; border:1px solid #ccc; border-radius:4px; font-size:13px; }
-  textarea { width:100%; height:26px; resize:none; }
-  button { margin:2px; padding:5px 8px; border:1px solid #ccc; border-radius:4px; cursor:pointer; font-size:13px; }
-  button:hover { background:#e5f0ff; }
-  #topBar { display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }
-  #masterSection { display:flex; align-items:center; gap:5px; }
-  #masterKeyInput { width:150px; }
-  #autoRefresh { font-size:12px; opacity:0.7; }
-  #pagination { margin-top:10px; font-size:13px; }
-</style>
+  <meta charset="UTF-8" />
+  <title>ID Manager</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      background: #f8fafc;
+      padding: 20px;
+      color: #111;
+    }
+    h2 { margin-bottom: 10px; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: white;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      font-size: 13px;
+    }
+    th, td {
+      padding: 4px 6px;
+      border-bottom: 1px solid #ddd;
+    }
+    th {
+      background: #e0f0ff;
+      text-align: left;
+    }
+    tr:hover { background: #f1f5f9; }
+    input[type="text"] {
+      padding: 6px;
+      width: 250px;
+      margin-bottom: 10px;
+      border-radius: 4px;
+      border: 1px solid #ccc;
+    }
+    button {
+      margin: 4px;
+      padding: 6px 10px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    button:hover { background: #e5f0ff; }
+    textarea {
+      width: 100%;
+      height: 38px;
+      font-size: 12px;
+    }
+    .note { font-size: 12px; color: #444; }
+    .pagination {
+      margin-top: 10px;
+      text-align: center;
+    }
+    .pagination button {
+      margin: 0 2px;
+      padding: 4px 8px;
+    }
+    #master-container {
+      position: absolute;
+      top: 10px;
+      right: 20px;
+      font-size: 13px;
+    }
+    #masterKey {
+      padding: 4px;
+      width: 130px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+  </style>
 </head>
 <body>
-  <div id="topBar">
-    <h2>🧩 ID Manager</h2>
-    <div id="masterSection">
-      <label for="masterKeyInput">Мастер-ключ:</label>
-      <input id="masterKeyInput" type="password" placeholder="••••••">
-      <button id="toggleKey">👁</button>
-      <div id="autoRefresh">⏳</div>
-    </div>
+  <div id="master-container">
+    🔑 <input type="password" id="masterKey" placeholder="Мастер ключ">
   </div>
 
+  <h2>🧩 ID Manager</h2>
   <div>
-    <input id="filter" placeholder="Фильтр по ID или пользователю">
+    <input id="filter" placeholder="Поиск по ID или пользователю">
     <button onclick="refresh()">🔄 Обновить</button>
     <button onclick="deleteSelected()">🗑️ Удалить выбранные</button>
     <button onclick="exportData()">📤 Экспорт</button>
     <button onclick="document.getElementById('importFile').click()">📥 Импорт</button>
+    <button onclick="addManual()">➕ Добавить ID</button>
     <button onclick="clearAll()">🔥 Очистить всё</button>
     <input type="file" id="importFile" accept=".json" style="display:none">
-    <br><br>
-    <input id="newId" placeholder="Введите новый ID">
-    <button onclick="addIdManual()">➕ Добавить</button>
   </div>
 
   <table id="idTable">
@@ -50,138 +94,170 @@
         <th><input type="checkbox" id="selectAll"></th>
         <th>ID</th>
         <th>Добавил</th>
-        <th>Дата</th>
+        <th>Когда</th>
         <th>Заметка</th>
       </tr>
     </thead>
     <tbody></tbody>
   </table>
 
-  <div id="pagination"></div>
+  <div class="pagination" id="pagination"></div>
 
 <script>
 let selected = new Set();
-let currentPage = 1, total = 0, items = [];
-const limit = 100;
-const autoRefreshEl = document.getElementById("autoRefresh");
-const masterInput = document.getElementById("masterKeyInput");
-const toggleKeyBtn = document.getElementById("toggleKey");
+let currentPage = 1;
+let totalPages = 1;
+let items = [];
+let isSearching = false;
+const PAGE_SIZE = 100;
 
-masterInput.value = localStorage.getItem("master_key") || "";
-masterInput.addEventListener("change", () => {
-  localStorage.setItem("master_key", masterInput.value);
+document.getElementById("masterKey").value = localStorage.getItem("master_key") || "";
+document.getElementById("masterKey").addEventListener("input", e => {
+  localStorage.setItem("master_key", e.target.value);
 });
-toggleKeyBtn.addEventListener("click", () => {
-  masterInput.type = masterInput.type === "password" ? "text" : "password";
+const MASTER_KEY = () => document.getElementById("masterKey").value;
+
+document.getElementById("filter").addEventListener("input", async (e) => {
+  const query = e.target.value.trim();
+  if (query.length === 0) {
+    isSearching = false;
+    load(currentPage);
+    return;
+  }
+  isSearching = true;
+  const res = await fetch(`/api/search?query=${encodeURIComponent(query)}`);
+  const data = await res.json();
+  items = data.items || [];
+  render();
 });
 
 document.getElementById("selectAll").addEventListener("change", e => {
-  const checked = e.target.checked;
-  document.querySelectorAll(".chk").forEach(chk => {
-    chk.checked = checked;
-    if (checked) selected.add(chk.dataset.id);
-    else selected.delete(chk.dataset.id);
-  });
+  const checkboxes = document.querySelectorAll(".chk");
+  if (e.target.checked) {
+    checkboxes.forEach(c => {
+      c.checked = true;
+      selected.add(c.dataset.id);
+    });
+  } else {
+    selected.clear();
+    checkboxes.forEach(c => c.checked = false);
+  }
 });
 
-document.getElementById("filter").addEventListener("input", render);
-
-async function load(page=1){
-  currentPage = page;
-  autoRefreshEl.textContent = "⏳ Обновление...";
-  const res = await fetch(`/api/list-full?page=${page}&limit=${limit}`);
+async function load(page = 1) {
+  if (isSearching) return; 
+  const res = await fetch(`/api/list?page=${page}`);
   const data = await res.json();
   items = data.items;
-  total = data.total;
+  totalPages = data.totalPages;
+  currentPage = page;
   render();
-  renderPagination();
-  autoRefreshEl.textContent = "✅ " + new Date().toLocaleTimeString();
 }
 
-function render(){
-  const filter = document.getElementById("filter").value.toLowerCase();
+function render() {
   const tbody = document.querySelector("#idTable tbody");
   tbody.innerHTML = "";
-  items
-    .filter(x => x.id.toLowerCase().includes(filter) || x.added_by.toLowerCase().includes(filter))
-    .forEach(x => {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `
-        <td><input type="checkbox" class="chk" data-id="${x.id}" ${selected.has(x.id)?"checked":""}></td>
-        <td>${x.id}</td>
-        <td>${x.added_by}</td>
-        <td>${new Date(x.created_at).toLocaleString()}</td>
-        <td><textarea data-id="${x.id}">${x.note||""}</textarea></td>
-      `;
-      tbody.appendChild(tr);
-    });
-  document.querySelectorAll(".chk").forEach(c=>c.addEventListener("change",e=>{
-    const id=e.target.dataset.id;
-    if(e.target.checked)selected.add(id); else selected.delete(id);
-  }));
-  document.querySelectorAll("textarea").forEach(a=>a.addEventListener("change",async e=>{
-    const id=e.target.dataset.id, note=e.target.value;
-    await fetch("/api/note",{method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({id,note,masterKey:localStorage.getItem("master_key")||""})});
-  }));
+  (items || []).forEach(x => {
+    const tr = document.createElement("tr");
+    const checked = selected.has(x.id) ? "checked" : "";
+    tr.innerHTML = `
+      <td><input type="checkbox" class="chk" data-id="${x.id}" ${checked}></td>
+      <td>${x.id}</td>
+      <td>${x.added_by}</td>
+      <td>${new Date(x.created_at).toLocaleString()}</td>
+      <td><textarea data-id="${x.id}">${x.note || ""}</textarea></td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  document.querySelectorAll(".chk").forEach(c =>
+    c.addEventListener("change", e => {
+      const id = e.target.dataset.id;
+      if (e.target.checked) selected.add(id);
+      else selected.delete(id);
+    })
+  );
+
+  document.querySelectorAll("textarea").forEach(a =>
+    a.addEventListener("change", async e => {
+      const id = e.target.dataset.id;
+      const note = e.target.value;
+      await fetch("/api/note", {
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({ id, note, masterKey: MASTER_KEY() })
+      });
+    })
+  );
+
+  const p = document.getElementById("pagination");
+  if (isSearching) {
+    p.innerHTML = `<p>🔍 Найдено ${items.length} записей</p>`;
+  } else {
+    const btns = [];
+    const range = 3;
+    for (let i = Math.max(1, currentPage - range); i <= Math.min(totalPages, currentPage + range); i++) {
+      btns.push(`<button ${i===currentPage?"style='font-weight:bold;background:#cde4ff'":""} onclick="load(${i})">${i}</button>`);
+    }
+    p.innerHTML = btns.join("");
+  }
 }
 
-function renderPagination(){
-  const totalPages=Math.ceil(total/limit);
-  const c=document.getElementById("pagination");
-  c.innerHTML="";
-  if(totalPages<=1)return;
-  const btn=(t,p,dis,a)=>{
-    const b=document.createElement("button"); b.textContent=t;
-    if(a)b.style.background="#90caf9";
-    if(!dis)b.onclick=()=>load(p); else b.disabled=true;
-    return b;
-  };
-  if(currentPage>1)c.appendChild(btn("‹",currentPage-1));
-  let start=Math.max(1,currentPage-2), end=Math.min(totalPages,currentPage+2);
-  if(start>1){c.appendChild(btn("1",1)); if(start>2)c.append("…");}
-  for(let i=start;i<=end;i++)c.appendChild(btn(i,i,false,i===currentPage));
-  if(end<totalPages){if(end<totalPages-1)c.append("…"); c.appendChild(btn(totalPages,totalPages));}
-  if(currentPage<totalPages)c.appendChild(btn("›",currentPage+1));
+async function deleteSelected() {
+  if (!confirm("Удалить выбранные?")) return;
+  await fetch("/api/delete-multiple", {
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({ ids:[...selected], masterKey: MASTER_KEY() })
+  });
+  selected.clear();
+  load();
 }
 
-async function deleteSelected(){
-  if(!confirm("Удалить выбранные?"))return;
-  await fetch("/api/delete-multiple",{method:"POST",headers:{"Content-Type":"application/json"},
-  body:JSON.stringify({ids:[...selected],masterKey:localStorage.getItem("master_key")||""})});
-  selected.clear(); load(currentPage);
+async function exportData() {
+  const res = await fetch("/api/export");
+  const blob = await res.blob();
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "ids_export.json";
+  a.click();
 }
 
-async function exportData(){
-  const res=await fetch("/api/export"); const blob=await res.blob();
-  const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
-  a.download="ids_export.json"; a.click();
-}
-
-document.getElementById("importFile").addEventListener("change",async e=>{
-  const f=e.target.files[0]; if(!f)return;
-  const fd=new FormData(); fd.append("file",f);
-  fd.append("masterKey",localStorage.getItem("master_key")||"");
-  await fetch("/api/import",{method:"POST",body:fd}); load(currentPage);
+document.getElementById("importFile").addEventListener("change", async e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("masterKey", MASTER_KEY());
+  await fetch("/api/import", { method:"POST", body:formData });
+  load();
 });
 
-async function clearAll(){
-  if(!confirm("Удалить всё?"))return;
-  await fetch("/api/clear-all",{method:"POST",headers:{"Content-Type":"application/json"},
-  body:JSON.stringify({masterKey:localStorage.getItem("master_key")||""})});
-  load(1);
+async function addManual() {
+  const id = prompt("Введите ID:");
+  if (!id) return;
+  const added_by = prompt("Кто добавил?");
+  await fetch("/api/add-id", {
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({ id, apiKey: added_by || "manual" })
+  });
+  load();
 }
 
-async function addIdManual(){
-  const id=document.getElementById("newId").value.trim();
-  if(!id)return alert("Введите ID");
-  await fetch("/api/add-id",{method:"POST",headers:{"Content-Type":"application/json"},
-  body:JSON.stringify({id,apiKey:"manual"})});
-  document.getElementById("newId").value=""; load(1);
+async function clearAll() {
+  if (!confirm("⚠️ Удалить ВСЕ записи?")) return;
+  await fetch("/api/clear-all", {
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({ masterKey: MASTER_KEY() })
+  });
+  load();
 }
 
-function refresh(){load(currentPage);}
-setInterval(refresh,5000);
+function refresh() { load(currentPage); }
+setInterval(() => { if (!isSearching) load(currentPage); }, 5000);
+
 load();
 </script>
 </body>

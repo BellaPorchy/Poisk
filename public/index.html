@@ -1,54 +1,35 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-<meta charset="UTF-8">
+<meta charset="UTF-8" />
 <title>ID Manager</title>
 <style>
-  body { font-family: system-ui, sans-serif; background:#f9fafb; color:#111; margin:0; padding:0; }
-  header { background:#e3f2fd; padding:10px 20px; display:flex; justify-content:space-between; align-items:center; }
-  header h2 { margin:0; font-size:18px; }
-  header input { padding:5px; border:1px solid #ccc; border-radius:4px; }
-  main { padding:20px; max-width:1200px; margin:auto; }
+  body { font-family: system-ui, sans-serif; background:#f8fafc; padding:20px; color:#111; }
   table { width:100%; border-collapse:collapse; background:white; box-shadow:0 1px 3px rgba(0,0,0,0.1); }
   th, td { padding:6px 8px; border-bottom:1px solid #ddd; }
-  th { background:#f1f5f9; text-align:left; }
-  tr:hover { background:#f8fafc; }
-  button { margin:4px; padding:6px 10px; border:1px solid #ccc; border-radius:4px; cursor:pointer; background:white; }
-  button:hover { background:#e0f2fe; }
-  textarea { width:100%; height:40px; resize:vertical; font-family:inherit; }
-  .controls { margin-bottom:10px; display:flex; flex-wrap:wrap; gap:5px; align-items:center; }
-  .pagination { text-align:center; margin-top:10px; }
-  .pagination button { margin:2px; }
-  .note { font-size:12px; color:#555; }
-  .hidden { display:none; }
-  #masterKeyContainer { position:fixed; top:10px; right:10px; background:#fff; padding:6px 10px; border-radius:6px; box-shadow:0 1px 3px rgba(0,0,0,0.2); font-size:13px; }
+  th { background:#e0f0ff; text-align:left; }
+  tr:hover { background:#f1f5f9; }
+  input, textarea { padding:6px; border:1px solid #ccc; border-radius:4px; }
+  textarea { width:100%; height:38px; resize:none; }
+  button { margin:3px; padding:6px 10px; border:1px solid #ccc; border-radius:4px; cursor:pointer; }
+  button:hover { background:#e5f0ff; }
+  #masterKeyInput { position:fixed; bottom:8px; right:8px; font-size:12px; width:130px; opacity:0.6; }
+  #autoRefresh { position:fixed; bottom:8px; left:8px; font-size:12px; opacity:0.7; }
 </style>
 </head>
 <body>
-<header>
   <h2>🧩 ID Manager</h2>
-  <div id="masterKeyContainer">
-    <label>Master key:</label>
-    <input type="password" id="masterKeyInput" placeholder="Введите ключ" style="width:120px">
-  </div>
-</header>
-
-<main>
-  <div class="controls">
-    <input id="filter" placeholder="🔍 Поиск по ID или пользователю">
-    <button onclick="load()">🔄 Обновить</button>
+  <div>
+    <input id="filter" placeholder="Фильтр по ID или пользователю">
+    <button onclick="refresh()">🔄 Обновить</button>
     <button onclick="deleteSelected()">🗑️ Удалить выбранные</button>
     <button onclick="exportData()">📤 Экспорт</button>
     <button onclick="document.getElementById('importFile').click()">📥 Импорт</button>
-    <button onclick="clearDB()">🔥 Очистить всё</button>
-    <button onclick="toggleManualForm()">➕ Добавить вручную</button>
+    <button onclick="clearAll()">🔥 Очистить всё</button>
     <input type="file" id="importFile" accept=".json" style="display:none">
-  </div>
-
-  <div id="manualForm" class="hidden">
-    <input id="manualID" placeholder="ID..." />
-    <input id="manualUser" placeholder="Пользователь..." />
-    <button onclick="addManual()">Добавить</button>
+    <br><br>
+    <input id="newId" placeholder="Введите новый ID">
+    <button onclick="addIdManual()">➕ Добавить</button>
   </div>
 
   <table id="idTable">
@@ -57,51 +38,53 @@
         <th><input type="checkbox" id="selectAll"></th>
         <th>ID</th>
         <th>Добавил</th>
-        <th>Когда</th>
+        <th>Дата</th>
         <th>Заметка</th>
       </tr>
     </thead>
     <tbody></tbody>
   </table>
-  <div class="pagination" id="pagination"></div>
-</main>
+
+  <div id="pagination" style="margin-top:10px;"></div>
+
+  <input id="masterKeyInput" placeholder="Мастер ключ">
+  <div id="autoRefresh">⏳ Обновление...</div>
 
 <script>
 let selected = new Set();
-let items = [];
-let total = 0;
-let currentPage = 1;
+let currentPage = 1, total = 0, items = [];
 const limit = 100;
-let masterKey = localStorage.getItem("masterKey") || "";
+const autoRefreshEl = document.getElementById("autoRefresh");
+const masterInput = document.getElementById("masterKeyInput");
+masterInput.value = localStorage.getItem("master_key") || "";
+masterInput.addEventListener("change", () => {
+  localStorage.setItem("master_key", masterInput.value);
+});
 
-document.getElementById("masterKeyInput").value = masterKey;
-document.getElementById("masterKeyInput").addEventListener("input", e => {
-  masterKey = e.target.value.trim();
-  localStorage.setItem("masterKey", masterKey);
+document.getElementById("selectAll").addEventListener("change", e => {
+  const checked = e.target.checked;
+  document.querySelectorAll(".chk").forEach(chk => {
+    chk.checked = checked;
+    if (checked) selected.add(chk.dataset.id);
+    else selected.delete(chk.dataset.id);
+  });
 });
 
 document.getElementById("filter").addEventListener("input", render);
-document.getElementById("selectAll").addEventListener("change", e => {
-  if (e.target.checked) items.forEach(x => selected.add(x.id));
-  else selected.clear();
-  render();
-});
 
-function toggleManualForm() {
-  document.getElementById("manualForm").classList.toggle("hidden");
-}
-
-async function load(page = 1) {
+async function load(page=1){
   currentPage = page;
-  const offset = (page - 1) * limit;
-  const res = await fetch(`/api/list-full?limit=${limit}&offset=${offset}`);
+  autoRefreshEl.textContent = "⏳ Обновление...";
+  const res = await fetch(`/api/list-full?page=${page}&limit=${limit}`);
   const data = await res.json();
   items = data.items;
   total = data.total;
   render();
+  renderPagination();
+  autoRefreshEl.textContent = "✅ Последнее обновление: " + new Date().toLocaleTimeString();
 }
 
-function render() {
+function render(){
   const filter = document.getElementById("filter").value.toLowerCase();
   const tbody = document.querySelector("#idTable tbody");
   tbody.innerHTML = "";
@@ -109,140 +92,82 @@ function render() {
     .filter(x => x.id.toLowerCase().includes(filter) || x.added_by.toLowerCase().includes(filter))
     .forEach(x => {
       const tr = document.createElement("tr");
-      const checked = selected.has(x.id) ? "checked" : "";
       tr.innerHTML = `
-        <td><input type="checkbox" class="chk" data-id="${x.id}" ${checked}></td>
+        <td><input type="checkbox" class="chk" data-id="${x.id}" ${selected.has(x.id)?"checked":""}></td>
         <td>${x.id}</td>
         <td>${x.added_by}</td>
         <td>${new Date(x.created_at).toLocaleString()}</td>
-        <td><textarea data-id="${x.id}">${x.note || ""}</textarea></td>
+        <td><textarea data-id="${x.id}">${x.note||""}</textarea></td>
       `;
       tbody.appendChild(tr);
     });
-  document.querySelectorAll(".chk").forEach(c =>
-    c.addEventListener("change", e => {
-      const id = e.target.dataset.id;
-      if (e.target.checked) selected.add(id);
-      else selected.delete(id);
-    })
-  );
-  document.querySelectorAll("textarea").forEach(a =>
-    a.addEventListener("change", async e => {
-      const id = e.target.dataset.id;
-      const note = e.target.value;
-      await fetch("/api/note", {
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({ id, note, masterKey })
-      });
-    })
-  );
-  renderPagination();
+  document.querySelectorAll(".chk").forEach(c=>c.addEventListener("change",e=>{
+    const id=e.target.dataset.id;
+    if(e.target.checked)selected.add(id); else selected.delete(id);
+  }));
+  document.querySelectorAll("textarea").forEach(a=>a.addEventListener("change",async e=>{
+    const id=e.target.dataset.id, note=e.target.value;
+    await fetch("/api/note",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({id,note,masterKey:localStorage.getItem("master_key")||""})});
+  }));
 }
 
-function renderPagination() {
-  const totalPages = Math.ceil(total / limit);
-  const container = document.getElementById("pagination");
-  container.innerHTML = "";
-
-  if (totalPages <= 1) return; // если всего одна страница — не показываем
-
-  const makeButton = (label, page, disabled = false, active = false) => {
-    const btn = document.createElement("button");
-    btn.textContent = label;
-    if (active) btn.style.background = "#90caf9";
-    if (disabled) {
-      btn.disabled = true;
-      btn.style.opacity = "0.5";
-    } else {
-      btn.onclick = () => load(page);
-    }
-    return btn;
+function renderPagination(){
+  const totalPages=Math.ceil(total/limit);
+  const c=document.getElementById("pagination");
+  c.innerHTML="";
+  if(totalPages<=1)return;
+  const btn=(t,p,dis,a)=>{
+    const b=document.createElement("button"); b.textContent=t;
+    if(a)b.style.background="#90caf9";
+    if(!dis)b.onclick=()=>load(p); else b.disabled=true;
+    return b;
   };
-
-  // Кнопка "назад"
-  container.appendChild(makeButton("‹", currentPage - 1, currentPage === 1));
-
-  let start = Math.max(1, currentPage - 2);
-  let end = Math.min(totalPages, currentPage + 2);
-
-  if (start > 1) {
-    container.appendChild(makeButton("1", 1));
-    if (start > 2) container.append("…");
-  }
-
-  for (let i = start; i <= end; i++) {
-    container.appendChild(makeButton(i, i, false, i === currentPage));
-  }
-
-  if (end < totalPages) {
-    if (end < totalPages - 1) container.append("…");
-    container.appendChild(makeButton(totalPages, totalPages));
-  }
-
-  // Кнопка "вперёд"
-  container.appendChild(makeButton("›", currentPage + 1, currentPage === totalPages));
+  if(currentPage>1)c.appendChild(btn("‹",currentPage-1));
+  let start=Math.max(1,currentPage-2), end=Math.min(totalPages,currentPage+2);
+  if(start>1){c.appendChild(btn("1",1)); if(start>2)c.append("…");}
+  for(let i=start;i<=end;i++)c.appendChild(btn(i,i,false,i===currentPage));
+  if(end<totalPages){if(end<totalPages-1)c.append("…"); c.appendChild(btn(totalPages,totalPages));}
+  if(currentPage<totalPages)c.appendChild(btn("›",currentPage+1));
 }
 
-async function deleteSelected() {
-  if (!masterKey) return alert("Введите мастер ключ!");
-  if (!confirm("Удалить выбранные?")) return;
-  await fetch("/api/delete-multiple", {
-    method:"POST",
-    headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({ ids:[...selected], masterKey })
-  });
-  selected.clear();
-  load(currentPage);
+async function deleteSelected(){
+  if(!confirm("Удалить выбранные?"))return;
+  await fetch("/api/delete-multiple",{method:"POST",headers:{"Content-Type":"application/json"},
+  body:JSON.stringify({ids:[...selected],masterKey:localStorage.getItem("master_key")||""})});
+  selected.clear(); load(currentPage);
 }
 
-async function clearDB() {
-  if (!masterKey) return alert("Введите мастер ключ!");
-  if (!confirm("Удалить ВСЁ из базы?")) return;
-  await fetch("/api/clear", {
-    method:"POST",
-    headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({ masterKey })
-  });
-  load(1);
+async function exportData(){
+  const res=await fetch("/api/export"); const blob=await res.blob();
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
+  a.download="ids_export.json"; a.click();
 }
 
-async function exportData() {
-  const res = await fetch("/api/export");
-  const blob = await res.blob();
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = "ids_export.json";
-  a.click();
-}
-
-document.getElementById("importFile").addEventListener("change", async e => {
-  if (!masterKey) return alert("Введите мастер ключ!");
-  const file = e.target.files[0];
-  if (!file) return;
-  const formData = new FormData();
-  formData.append("file", file);
-  formData.append("masterKey", masterKey);
-  const res = await fetch("/api/import", { method:"POST", body:formData });
-  if (!res.ok) alert("Ошибка импорта");
-  load();
+document.getElementById("importFile").addEventListener("change",async e=>{
+  const f=e.target.files[0]; if(!f)return;
+  const fd=new FormData(); fd.append("file",f);
+  fd.append("masterKey",localStorage.getItem("master_key")||"");
+  await fetch("/api/import",{method:"POST",body:fd}); load(currentPage);
 });
 
-async function addManual() {
-  const id = document.getElementById("manualID").value.trim();
-  const added_by = document.getElementById("manualUser").value.trim();
-  if (!id) return alert("Введите ID!");
-  if (!masterKey) return alert("Введите мастер ключ!");
-  await fetch("/api/add-manual", {
-    method:"POST",
-    headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({ id, added_by, masterKey })
-  });
-  document.getElementById("manualID").value = "";
-  document.getElementById("manualUser").value = "";
+async function clearAll(){
+  if(!confirm("Удалить всё?"))return;
+  await fetch("/api/clear-all",{method:"POST",headers:{"Content-Type":"application/json"},
+  body:JSON.stringify({masterKey:localStorage.getItem("master_key")||""})});
   load(1);
 }
 
+async function addIdManual(){
+  const id=document.getElementById("newId").value.trim();
+  if(!id)return alert("Введите ID");
+  await fetch("/api/add-id",{method:"POST",headers:{"Content-Type":"application/json"},
+  body:JSON.stringify({id,apiKey:"manual"})});
+  document.getElementById("newId").value=""; load(1);
+}
+
+function refresh(){load(currentPage);}
+setInterval(refresh,5000);
 load();
 </script>
 </body>

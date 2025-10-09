@@ -339,37 +339,54 @@ app.get("/api/export", async (req, res) => {
 });
 
 // Импорт
-// Импорт
 app.post("/api/import", upload.single("file"), async (req, res) => {
   const { masterKey } = req.body;
-  if (masterKey !== MASTER_KEY) return res.status(403).json({ error: "Нет доступа" });
+  if (masterKey !== MASTER_KEY) {
+    console.warn("⛔ Попытка импорта без мастер-ключа");
+    return res.status(403).json({ error: "Нет доступа" });
+  }
 
   try {
-    const fileText = req.file.buffer.toString();
-    let fileData = JSON.parse(fileText);
-
-    // ✅ Поддержка обоих форматов
-    if (fileData.items && Array.isArray(fileData.items)) {
-      fileData = fileData.items;
-    } else if (!Array.isArray(fileData)) {
-      return res.status(400).json({ error: "Некорректный формат файла" });
+    if (!req.file) {
+      console.error("❌ Файл не получен");
+      return res.status(400).json({ error: "Файл не получен" });
     }
 
-    let inserted = 0;
-    for (const row of fileData) {
-      if (!row.id) continue;
+    const text = req.file.buffer.toString("utf8").trim();
+    let json;
+    try {
+      json = JSON.parse(text);
+    } catch (err) {
+      console.error("❌ Ошибка парсинга JSON:", err.message);
+      console.error("📄 Содержимое файла:", text.slice(0, 200));
+      return res.status(400).json({ error: "Некорректный JSON" });
+    }
+
+    let items = [];
+    if (Array.isArray(json)) {
+      items = json;
+    } else if (json.items && Array.isArray(json.items)) {
+      items = json.items;
+    } else {
+      console.error("❌ Неизвестный формат данных:", Object.keys(json));
+      return res.status(400).json({ error: "Неверный формат: ожидался массив или объект с полем 'items'" });
+    }
+
+    let count = 0;
+    for (const item of items) {
+      if (!item.id) continue;
       await pool.query(
         "INSERT INTO ids (id, added_by, note, created_at) VALUES ($1,$2,$3,$4) ON CONFLICT (id) DO NOTHING",
-        [row.id, row.added_by || "Импорт", row.note || "", row.created_at || new Date()]
+        [item.id, item.added_by || "Импорт", item.note || "", item.created_at || new Date()]
       );
-      inserted++;
+      count++;
     }
 
-    console.log(`✅ Импортировано ${inserted} записей`);
-    res.json({ success: true, inserted });
+    console.log(`✅ Успешно импортировано ${count} записей`);
+    res.json({ success: true, imported: count });
   } catch (err) {
-    console.error("❌ Ошибка импорта:", err);
-    res.status(500).json({ error: "Ошибка при импорте файла" });
+    console.error("❌ Критическая ошибка импорта:", err);
+    res.status(500).json({ error: "Ошибка при обработке файла" });
   }
 });
 

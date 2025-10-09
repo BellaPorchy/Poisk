@@ -1,5 +1,6 @@
 import express from "express";
 import cors from "cors";
+import fs from "fs";
 import pkg from "pg";
 import multer from "multer";
 import dotenv from "dotenv";
@@ -64,40 +65,35 @@ app.get("/", async (req, res) => {
 <style>
   body { font-family: system-ui, sans-serif; background:#f8fafc; padding:20px; color:#111; }
   table { width:100%; border-collapse:collapse; background:white; box-shadow:0 1px 3px rgba(0,0,0,0.1); }
-  th, td { padding:4px 6px; border-bottom:1px solid #ddd; }
+  th, td { padding:6px 8px; border-bottom:1px solid #ddd; }
   th { background:#e0f0ff; text-align:left; }
   tr:hover { background:#f1f5f9; }
-  input[type="text"] { padding:6px; width:250px; margin-bottom:10px; }
+  input[type="text"], input[type="password"] { padding:6px; width:220px; margin:4px; }
   button { margin:4px; padding:6px 10px; border:1px solid #ccc; border-radius:4px; cursor:pointer; }
   button:hover { background:#e5f0ff; }
   textarea { width:100%; height:40px; }
-  .note { font-size:12px; color:#444; }
-  #toast {
-    position: fixed;
-    bottom: 20px;
-    right: 20px;
-    background: #22c55e;
-    color: white;
-    padding: 10px 16px;
-    border-radius: 8px;
-    opacity: 0;
-    transition: opacity 0.5s;
-    pointer-events: none;
-    font-size: 14px;
-    box-shadow: 0 2px 5px rgba(0,0,0,0.15);
-  }
+  #topbar { margin-bottom:10px; background:#fff; padding:10px; border-radius:6px; box-shadow:0 1px 3px rgba(0,0,0,0.1); display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+  #status { font-weight:bold; margin-left:10px; }
+  #status.locked { color:#c00; }
+  #status.unlocked { color:green; }
 </style>
 </head>
 <body>
   <h2>🧩 ID Manager</h2>
-  <div>
+  <div id="topbar">
     <input id="filter" placeholder="Фильтр по ID или пользователю">
+    <input id="masterKey" type="password" placeholder="Мастер-ключ">
+    <button onclick="saveKey()">💾 Сохранить ключ</button>
+    <span id="status" class="locked">🔒 Ключ неактивен</span>
+    <input id="newId" placeholder="Добавить новый ID вручную">
+    <button onclick="addManual()">➕ Добавить ID</button>
     <button onclick="refresh()">🔄 Обновить</button>
     <button onclick="deleteSelected()">🗑️ Удалить выбранные</button>
     <button onclick="exportData()">📤 Экспорт</button>
     <button onclick="document.getElementById('importFile').click()">📥 Импорт</button>
     <input type="file" id="importFile" accept=".json" style="display:none">
   </div>
+
   <table id="idTable">
     <thead>
       <tr>
@@ -111,77 +107,58 @@ app.get("/", async (req, res) => {
     <tbody></tbody>
   </table>
 
-  <div id="toast"></div>
-
 <script>
-/* 
-  ВАЖНО: теперь мастеркей НЕ запрашивается автоматически при заходе на страницу.
-  Запрос появится только при попытке выполнить защищённое действие.
-*/
-
 let selected = new Set();
+let MASTER_KEY = localStorage.getItem("master_key") || "";
+document.getElementById("masterKey").value = MASTER_KEY;
+updateStatus();
 
-function showToast(text, color="#22c55e") {
-  const t = document.getElementById("toast");
-  t.style.background = color;
-  t.textContent = text;
-  t.style.opacity = "1";
-  setTimeout(() => (t.style.opacity = "0"), 2500);
+function updateStatus() {
+  const s = document.getElementById("status");
+  if (MASTER_KEY) {
+    s.textContent = "🟢 Ключ активен";
+    s.className = "unlocked";
+  } else {
+    s.textContent = "🔒 Ключ неактивен";
+    s.className = "locked";
+  }
 }
 
-function getMasterKeyOrAsk() {
-  // пытаемся взять из localStorage
-  let k = localStorage.getItem("master_key");
-  if (k && k.trim()) return k.trim();
-
-  // спрашиваем один раз и сохраняем
-  const entered = prompt("Введите мастер-ключ (требуется для админ-действий):");
-  if (entered && entered.trim()) {
-    localStorage.setItem("master_key", entered.trim());
-    return entered.trim();
-  }
-  return null;
+function saveKey() {
+  const key = document.getElementById("masterKey").value.trim();
+  localStorage.setItem("master_key", key);
+  MASTER_KEY = key;
+  updateStatus();
+  alert("🔑 Мастер-ключ сохранён!");
 }
 
 document.getElementById("filter").addEventListener("input", render);
 
-// загрузка данных и рендер (автообновление)
 async function load() {
-  try {
-    const res = await fetch("/api/list-full");
-    const data = await res.json();
-    window.items = data.items;
-    render(false);
-  } catch (err) {
-    console.error("Ошибка загрузки списка:", err);
-    showToast("⚠️ Не удалось загрузить список", "#ef4444");
-  }
+  const res = await fetch("/api/list-full");
+  const data = await res.json();
+  window.items = data.items;
+  render();
 }
-
-function render(clearSelection = false) {
+function render() {
   const filter = document.getElementById("filter").value.toLowerCase();
   const tbody = document.querySelector("#idTable tbody");
-  const prevSelected = new Set(selected);
-
-  if (clearSelection) selected.clear();
-
+  const items = window.items || [];
   tbody.innerHTML = "";
-  (window.items||[])
-    .filter(x => x.id.toLowerCase().includes(filter) || (x.added_by||"").toLowerCase().includes(filter))
+  items
+    .filter(x => x.id.toLowerCase().includes(filter) || x.added_by.toLowerCase().includes(filter))
     .forEach(x => {
       const tr = document.createElement("tr");
-      const checked = prevSelected.has(x.id) ? "checked" : "";
-      tr.innerHTML = \`
-        <td><input type="checkbox" class="chk" data-id="\${x.id}" \${checked}></td>
-        <td>\${x.id}</td>
-        <td>\${x.added_by}</td>
-        <td>\${new Date(x.created_at).toLocaleString()}</td>
-        <td><textarea data-id="\${x.id}">\${x.note || ""}</textarea></td>
-      \`;
+      const checked = selected.has(x.id) ? "checked" : "";
+      tr.innerHTML =
+        '<td><input type="checkbox" class="chk" data-id="' + x.id + '" ' + checked + '></td>' +
+        '<td>' + x.id + '</td>' +
+        '<td>' + x.added_by + '</td>' +
+        '<td>' + new Date(x.created_at).toLocaleString() + '</td>' +
+        '<td><textarea data-id="' + x.id + '">' + (x.note || "") + '</textarea></td>';
       tbody.appendChild(tr);
     });
 
-  // слушатели для чекбоксов (сохраняем выбор между перерисовками)
   document.querySelectorAll(".chk").forEach(c =>
     c.addEventListener("change", e => {
       const id = e.target.dataset.id;
@@ -190,120 +167,82 @@ function render(clearSelection = false) {
     })
   );
 
-  // слушатели для заметок — сохраняем только если есть мастеркей (пользователь будет запросен, если нет)
   document.querySelectorAll("textarea").forEach(a =>
     a.addEventListener("change", async e => {
       const id = e.target.dataset.id;
       const note = e.target.value;
-      const masterKey = getMasterKeyOrAsk();
-      if (!masterKey) {
-        showToast("❗ Мастер-ключ не указан — заметка не сохранена", "#ef4444");
-        // перезагрузим содержимое заметки из серверных данных, чтобы не вводить ложное чувство что сохранено
-        load();
-        return;
-      }
-      try {
-        const r = await fetch("/api/note", {
-          method:"POST",
-          headers:{"Content-Type":"application/json"},
-          body:JSON.stringify({ id, note, masterKey })
-        });
-        const j = await r.json();
-        if (r.ok && j.success) showToast("💾 Заметка сохранена");
-        else {
-          showToast("❌ Ошибка сохранения", "#ef4444");
-        }
-      } catch (err) {
-        console.error(err);
-        showToast("❌ Ошибка сохранения", "#ef4444");
-      }
+      await fetch("/api/note", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, note, masterKey: MASTER_KEY })
+      });
     })
   );
 }
 
-async function deleteSelected() {
-  const ids = [...selected];
-  if (ids.length === 0) {
-    showToast("⚠️ Ничего не выбрано", "#ef4444");
-    return;
-  }
-  if (!confirm(\`Удалить \${ids.length} записей?\`)) return;
-
-  const masterKey = getMasterKeyOrAsk();
-  if (!masterKey) { showToast("❗ Мастер-ключ не указан", "#ef4444"); return; }
-
-  try {
-    const r = await fetch("/api/delete-multiple", {
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({ ids, masterKey })
-    });
-    const j = await r.json();
-    if (r.ok && j.success) {
-      showToast("🗑️ Удалено " + ids.length);
-      selected.clear();
-      load();
-    } else {
-      showToast("❌ Ошибка удаления", "#ef4444");
-    }
-  } catch (err) {
-    console.error(err);
-    showToast("❌ Ошибка удаления", "#ef4444");
+async function addManual() {
+  const id = document.getElementById("newId").value.trim();
+  if (!id) return alert("Введите ID");
+  const res = await fetch("/api/add-manual", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id, masterKey: MASTER_KEY })
+  });
+  const data = await res.json();
+  if (res.ok) {
+    alert("✅ ID добавлен!");
+    document.getElementById("newId").value = "";
+    load();
+  } else {
+    alert("❌ Ошибка: " + (data.error || "Не удалось добавить ID"));
   }
 }
 
+async function deleteSelected() {
+  if (!confirm("Удалить выбранные?")) return;
+  await fetch("/api/delete-multiple", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids: [...selected], masterKey: MASTER_KEY })
+  });
+  selected.clear();
+  load();
+}
+
 async function exportData() {
-  try {
-    const res = await fetch("/api/export");
-    const blob = await res.blob();
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = "ids_export.json";
-    a.click();
-    showToast("📤 Экспорт выполнен");
-  } catch (err) {
-    console.error(err);
-    showToast("❌ Ошибка экспорта", "#ef4444");
-  }
+  const res = await fetch("/api/export");
+  const blob = await res.blob();
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "ids_export.json";
+  a.click();
 }
 
 document.getElementById("importFile").addEventListener("change", async e => {
   const file = e.target.files[0];
   if (!file) return;
-
-  // Проверяем наличие мастер-ключа
-  let masterKey = localStorage.getItem("master_key");
-  if (!masterKey) {
-    masterKey = prompt("Введите мастер-ключ для импорта:");
-    if (masterKey) localStorage.setItem("master_key", masterKey);
-    else {
-      alert("Импорт отменён — мастер-ключ не введён");
-      return;
-    }
+  if (!MASTER_KEY) {
+    alert("⚠️ Сначала введите мастер-ключ сверху!");
+    return;
   }
-
-  // Отправляем файл
   const formData = new FormData();
   formData.append("file", file);
-  formData.append("masterKey", masterKey);
-
+  formData.append("masterKey", MASTER_KEY);
   try {
     const res = await fetch("/api/import", { method: "POST", body: formData });
     const data = await res.json();
-
     if (res.ok) {
-      alert(`✅ Импортировано ${data.imported || 0} записей`);
+      alert("✅ Импорт успешно выполнен!");
       load();
     } else {
-      alert(`❌ Ошибка импорта: ${data.error || "Неизвестная ошибка"}`);
+      alert("❌ Ошибка импорта: " + (data.error || "Неизвестная ошибка"));
     }
   } catch (err) {
-    alert("❌ Ошибка при соединении с сервером: " + err.message);
+    alert("❌ Ошибка соединения: " + err.message);
   }
 });
 
-
-function refresh(){ load(); }
+function refresh() { load(); }
 setInterval(load, 2000);
 load();
 </script>
@@ -316,6 +255,18 @@ load();
 app.get("/api/list-full", async (req, res) => {
   const q = await pool.query("SELECT * FROM ids ORDER BY created_at DESC");
   res.json({ items: q.rows });
+});
+
+// Добавление ID вручную
+app.post("/api/add-manual", async (req, res) => {
+  const { id, masterKey } = req.body;
+  if (!id) return res.status(400).json({ error: "Нет ID" });
+  const user = masterKey === MASTER_KEY ? "Manual (Admin)" : "Manual (Guest)";
+  await pool.query(
+    "INSERT INTO ids (id, added_by) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING",
+    [id, user]
+  );
+  res.json({ success: true });
 });
 
 app.post("/api/add-id", async (req, res) => {
@@ -346,63 +297,27 @@ app.post("/api/delete-multiple", async (req, res) => {
 app.get("/api/export", async (req, res) => {
   const q = await pool.query("SELECT * FROM ids");
   res.setHeader("Content-Disposition", "attachment; filename=ids_export.json");
-  res.json({ items: q.rows });
+  res.json(q.rows);
 });
 
-// Импорт
 app.post("/api/import", upload.single("file"), async (req, res) => {
-  const { masterKey } = req.body;
-  if (masterKey !== MASTER_KEY) {
-    console.warn("⛔ Попытка импорта без мастер-ключа");
-    return res.status(403).json({ error: "Нет доступа" });
-  }
-
   try {
-    if (!req.file) {
-      console.error("❌ Файл не получен");
-      return res.status(400).json({ error: "Файл не получен" });
-    }
-
-    const text = req.file.buffer.toString("utf8").trim();
-    let json;
-    try {
-      json = JSON.parse(text);
-    } catch (err) {
-      console.error("❌ Ошибка парсинга JSON:", err.message);
-      console.error("📄 Содержимое файла:", text.slice(0, 200));
-      return res.status(400).json({ error: "Некорректный JSON" });
-    }
-
-    let items = [];
-    if (Array.isArray(json)) {
-      items = json;
-    } else if (json.items && Array.isArray(json.items)) {
-      items = json.items;
-    } else {
-      console.error("❌ Неизвестный формат данных:", Object.keys(json));
-      return res.status(400).json({ error: "Неверный формат: ожидался массив или объект с полем 'items'" });
-    }
-
-    let count = 0;
-    for (const item of items) {
-      if (!item.id) continue;
+    const { masterKey } = req.body;
+    if (masterKey !== MASTER_KEY) return res.status(403).json({ error: "Нет доступа" });
+    const fileData = JSON.parse(req.file.buffer.toString());
+    const items = Array.isArray(fileData.items) ? fileData.items : fileData;
+    for (const row of items) {
       await pool.query(
         "INSERT INTO ids (id, added_by, note, created_at) VALUES ($1,$2,$3,$4) ON CONFLICT (id) DO NOTHING",
-        [item.id, item.added_by || "Импорт", item.note || "", item.created_at || new Date()]
+        [row.id, row.added_by, row.note || "", row.created_at || new Date()]
       );
-      count++;
     }
-
-    console.log(`✅ Успешно импортировано ${count} записей`);
-    res.json({ success: true, imported: count });
+    res.json({ success: true });
   } catch (err) {
-    console.error("❌ Критическая ошибка импорта:", err);
-    res.status(500).json({ error: "Ошибка при обработке файла" });
+    console.error("Ошибка импорта:", err);
+    res.status(500).json({ error: "Ошибка импорта" });
   }
 });
 
-
 // === ЗАПУСК ===
-app.listen(process.env.PORT || 10000, () =>
-  console.log("🚀 Сервер запущен")
-);
+app.listen(process.env.PORT || 10000, () => console.log("🚀 Сервер запущен"));

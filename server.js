@@ -1,6 +1,5 @@
 import express from "express";
 import cors from "cors";
-import fs from "fs";
 import pkg from "pg";
 import multer from "multer";
 import dotenv from "dotenv";
@@ -19,13 +18,11 @@ if (process.env.USER_KEYS) {
     const parsed = JSON.parse(process.env.USER_KEYS);
     if (parsed && Array.isArray(parsed.keys)) {
       keys = parsed.keys;
-      console.log(`✅ Загружено ${keys.length} API-ключей из окружения`);
+      console.log(`✅ Загружено ${keys.length} API-ключей`);
     }
   } catch (err) {
-    console.error("❌ Ошибка при чтении USER_KEYS:", err);
+    console.error("❌ Ошибка USER_KEYS:", err);
   }
-} else {
-  console.warn("⚠️ Переменная USER_KEYS не установлена");
 }
 
 // === МАСТЕР КЛЮЧ ===
@@ -37,7 +34,6 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false },
 });
 
-// === ИНИЦИАЛИЗАЦИЯ ТАБЛИЦЫ ===
 await pool.query(`
   CREATE TABLE IF NOT EXISTS ids (
     id TEXT PRIMARY KEY,
@@ -48,7 +44,6 @@ await pool.query(`
 `);
 console.log("✅ Таблица проверена");
 
-// === ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ===
 const findUserByKey = (key) => {
   const found = keys.find((x) => x.key === key);
   return found ? found.user : key;
@@ -65,17 +60,17 @@ app.get("/", async (req, res) => {
 <style>
   body { font-family: system-ui, sans-serif; background:#f8fafc; padding:20px; color:#111; }
   table { width:100%; border-collapse:collapse; background:white; box-shadow:0 1px 3px rgba(0,0,0,0.1); }
-  th, td { padding:6px 8px; border-bottom:1px solid #ddd; }
+  th, td { padding:6px 8px; border-bottom:1px solid #ddd; font-size:14px; }
   th { background:#e0f0ff; text-align:left; }
   tr:hover { background:#f1f5f9; }
   input[type="text"], input[type="password"] { padding:6px; width:220px; margin:4px; }
   button { margin:4px; padding:6px 10px; border:1px solid #ccc; border-radius:4px; cursor:pointer; }
   button:hover { background:#e5f0ff; }
-  textarea { width:100%; height:40px; }
+  textarea { width:100%; height:40px; font-size:12px; }
   #topbar { margin-bottom:10px; background:#fff; padding:10px; border-radius:6px; box-shadow:0 1px 3px rgba(0,0,0,0.1); display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
-  #status { font-weight:bold; margin-left:10px; }
   #status.locked { color:#c00; }
   #status.unlocked { color:green; }
+  #pagination { margin-top:10px; display:flex; justify-content:center; align-items:center; gap:10px; }
 </style>
 </head>
 <body>
@@ -97,7 +92,7 @@ app.get("/", async (req, res) => {
   <table id="idTable">
     <thead>
       <tr>
-        <th></th>
+        <th><input type="checkbox" id="selectAll"></th>
         <th>ID</th>
         <th>Добавил</th>
         <th>Когда</th>
@@ -107,29 +102,30 @@ app.get("/", async (req, res) => {
     <tbody></tbody>
   </table>
 
+  <div id="pagination">
+    <button onclick="prevPage()">⬅️</button>
+    <span id="pageInfo">Стр. 1 / 1</span>
+    <button onclick="nextPage()">➡️</button>
+  </div>
+
 <script>
 let selected = new Set();
 let MASTER_KEY = localStorage.getItem("master_key") || "";
+let page = 1;
+const PER_PAGE = 100;
+
 document.getElementById("masterKey").value = MASTER_KEY;
 updateStatus();
 
 function updateStatus() {
   const s = document.getElementById("status");
-  if (MASTER_KEY) {
-    s.textContent = "🟢 Ключ активен";
-    s.className = "unlocked";
-  } else {
-    s.textContent = "🔒 Ключ неактивен";
-    s.className = "locked";
-  }
+  if (MASTER_KEY) { s.textContent = "🟢 Ключ активен"; s.className = "unlocked"; }
+  else { s.textContent = "🔒 Ключ неактивен"; s.className = "locked"; }
 }
-
 function saveKey() {
-  const key = document.getElementById("masterKey").value.trim();
-  localStorage.setItem("master_key", key);
-  MASTER_KEY = key;
+  MASTER_KEY = document.getElementById("masterKey").value.trim();
+  localStorage.setItem("master_key", MASTER_KEY);
   updateStatus();
-  alert("🔑 Мастер-ключ сохранён!");
 }
 
 document.getElementById("filter").addEventListener("input", render);
@@ -143,21 +139,27 @@ async function load() {
 function render() {
   const filter = document.getElementById("filter").value.toLowerCase();
   const tbody = document.querySelector("#idTable tbody");
-  const items = window.items || [];
+  const filtered = (window.items || []).filter(x =>
+    x.id.toLowerCase().includes(filter) || x.added_by.toLowerCase().includes(filter)
+  );
+  const totalPages = Math.ceil(filtered.length / PER_PAGE);
+  if (page > totalPages) page = totalPages || 1;
+  const start = (page - 1) * PER_PAGE;
+  const slice = filtered.slice(start, start + PER_PAGE);
   tbody.innerHTML = "";
-  items
-    .filter(x => x.id.toLowerCase().includes(filter) || x.added_by.toLowerCase().includes(filter))
-    .forEach(x => {
-      const tr = document.createElement("tr");
-      const checked = selected.has(x.id) ? "checked" : "";
-      tr.innerHTML =
-        '<td><input type="checkbox" class="chk" data-id="' + x.id + '" ' + checked + '></td>' +
-        '<td>' + x.id + '</td>' +
-        '<td>' + x.added_by + '</td>' +
-        '<td>' + new Date(x.created_at).toLocaleString() + '</td>' +
-        '<td><textarea data-id="' + x.id + '">' + (x.note || "") + '</textarea></td>';
-      tbody.appendChild(tr);
-    });
+  slice.forEach(x => {
+    const tr = document.createElement("tr");
+    const checked = selected.has(x.id) ? "checked" : "";
+    tr.innerHTML =
+      '<td><input type="checkbox" class="chk" data-id="' + x.id + '" ' + checked + '></td>' +
+      '<td>' + x.id + '</td>' +
+      '<td>' + x.added_by + '</td>' +
+      '<td>' + new Date(x.created_at).toLocaleString() + '</td>' +
+      '<td><textarea data-id="' + x.id + '">' + (x.note || "") + '</textarea></td>';
+    tbody.appendChild(tr);
+  });
+
+  document.getElementById("pageInfo").textContent = "Стр. " + page + " / " + totalPages;
 
   document.querySelectorAll(".chk").forEach(c =>
     c.addEventListener("change", e => {
@@ -166,6 +168,13 @@ function render() {
       else selected.delete(id);
     })
   );
+
+  document.getElementById("selectAll").checked = slice.every(x => selected.has(x.id));
+  document.getElementById("selectAll").onclick = () => {
+    const all = document.getElementById("selectAll").checked;
+    slice.forEach(x => { if (all) selected.add(x.id); else selected.delete(x.id); });
+    render();
+  };
 
   document.querySelectorAll("textarea").forEach(a =>
     a.addEventListener("change", async e => {
@@ -179,6 +188,15 @@ function render() {
     })
   );
 }
+function prevPage() { if (page > 1) { page--; render(); } }
+function nextPage() {
+  const filter = document.getElementById("filter").value.toLowerCase();
+  const total = (window.items || []).filter(x =>
+    x.id.toLowerCase().includes(filter) || x.added_by.toLowerCase().includes(filter)
+  ).length;
+  const totalPages = Math.ceil(total / PER_PAGE);
+  if (page < totalPages) { page++; render(); }
+}
 
 async function addManual() {
   const id = document.getElementById("newId").value.trim();
@@ -188,14 +206,8 @@ async function addManual() {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ id, masterKey: MASTER_KEY })
   });
-  const data = await res.json();
-  if (res.ok) {
-    alert("✅ ID добавлен!");
-    document.getElementById("newId").value = "";
-    load();
-  } else {
-    alert("❌ Ошибка: " + (data.error || "Не удалось добавить ID"));
-  }
+  if (res.ok) { alert("✅ ID добавлен!"); document.getElementById("newId").value = ""; load(); }
+  else alert("❌ Ошибка");
 }
 
 async function deleteSelected() {
@@ -221,28 +233,17 @@ async function exportData() {
 document.getElementById("importFile").addEventListener("change", async e => {
   const file = e.target.files[0];
   if (!file) return;
-  if (!MASTER_KEY) {
-    alert("⚠️ Сначала введите мастер-ключ сверху!");
-    return;
-  }
+  if (!MASTER_KEY) return alert("⚠️ Введите мастер-ключ!");
   const formData = new FormData();
   formData.append("file", file);
   formData.append("masterKey", MASTER_KEY);
-  try {
-    const res = await fetch("/api/import", { method: "POST", body: formData });
-    const data = await res.json();
-    if (res.ok) {
-      alert("✅ Импорт успешно выполнен!");
-      load();
-    } else {
-      alert("❌ Ошибка импорта: " + (data.error || "Неизвестная ошибка"));
-    }
-  } catch (err) {
-    alert("❌ Ошибка соединения: " + err.message);
-  }
+  const res = await fetch("/api/import", { method: "POST", body: formData });
+  if (res.ok) alert("✅ Импорт выполнен!");
+  else alert("❌ Ошибка импорта");
+  load();
 });
 
-function refresh() { load(); }
+function refresh(){ load(); }
 setInterval(load, 2000);
 load();
 </script>
@@ -257,15 +258,11 @@ app.get("/api/list-full", async (req, res) => {
   res.json({ items: q.rows });
 });
 
-// Добавление ID вручную
 app.post("/api/add-manual", async (req, res) => {
   const { id, masterKey } = req.body;
   if (!id) return res.status(400).json({ error: "Нет ID" });
   const user = masterKey === MASTER_KEY ? "Manual (Admin)" : "Manual (Guest)";
-  await pool.query(
-    "INSERT INTO ids (id, added_by) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING",
-    [id, user]
-  );
+  await pool.query("INSERT INTO ids (id, added_by) VALUES ($1,$2) ON CONFLICT (id) DO NOTHING", [id, user]);
   res.json({ success: true });
 });
 
@@ -273,10 +270,7 @@ app.post("/api/add-id", async (req, res) => {
   const { id, apiKey } = req.body;
   if (!id || !apiKey) return res.status(400).json({ error: "Неверные данные" });
   const user = findUserByKey(apiKey);
-  await pool.query(
-    "INSERT INTO ids (id, added_by) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING",
-    [id, user]
-  );
+  await pool.query("INSERT INTO ids (id, added_by) VALUES ($1,$2) ON CONFLICT (id) DO NOTHING", [id, user]);
   res.json({ success: true });
 });
 
@@ -319,5 +313,4 @@ app.post("/api/import", upload.single("file"), async (req, res) => {
   }
 });
 
-// === ЗАПУСК ===
 app.listen(process.env.PORT || 10000, () => console.log("🚀 Сервер запущен"));

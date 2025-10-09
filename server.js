@@ -60,6 +60,18 @@ app.get("/api/list", async (req, res) => {
   res.json({ items: q.rows, totalPages });
 });
 
+// === API: Получение всех ID для расширения ===
+app.get("/api/all", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT id, added_by, note, created_at FROM ids ORDER BY created_at DESC");
+    res.json(result.rows);
+  } catch (err) {
+    console.error("Ошибка при получении всех ID:", err);
+    res.status(500).json({ error: "Ошибка при получении данных" });
+  }
+});
+
+
 // === Глобальный поиск ===
 app.get("/api/search", async (req, res) => {
   const query = req.query.query?.toLowerCase() || "";

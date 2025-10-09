@@ -144,13 +144,44 @@ function renderPagination() {
   const totalPages = Math.ceil(total / limit);
   const container = document.getElementById("pagination");
   container.innerHTML = "";
-  for (let i = 1; i <= totalPages; i++) {
+
+  if (totalPages <= 1) return; // если всего одна страница — не показываем
+
+  const makeButton = (label, page, disabled = false, active = false) => {
     const btn = document.createElement("button");
-    btn.textContent = i;
-    if (i === currentPage) btn.style.background = "#90caf9";
-    btn.onclick = () => load(i);
-    container.appendChild(btn);
+    btn.textContent = label;
+    if (active) btn.style.background = "#90caf9";
+    if (disabled) {
+      btn.disabled = true;
+      btn.style.opacity = "0.5";
+    } else {
+      btn.onclick = () => load(page);
+    }
+    return btn;
+  };
+
+  // Кнопка "назад"
+  container.appendChild(makeButton("‹", currentPage - 1, currentPage === 1));
+
+  let start = Math.max(1, currentPage - 2);
+  let end = Math.min(totalPages, currentPage + 2);
+
+  if (start > 1) {
+    container.appendChild(makeButton("1", 1));
+    if (start > 2) container.append("…");
   }
+
+  for (let i = start; i <= end; i++) {
+    container.appendChild(makeButton(i, i, false, i === currentPage));
+  }
+
+  if (end < totalPages) {
+    if (end < totalPages - 1) container.append("…");
+    container.appendChild(makeButton(totalPages, totalPages));
+  }
+
+  // Кнопка "вперёд"
+  container.appendChild(makeButton("›", currentPage + 1, currentPage === totalPages));
 }
 
 async function deleteSelected() {

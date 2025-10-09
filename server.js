@@ -338,39 +338,45 @@ app.get("/api/export", async (req, res) => {
   res.json({ items: q.rows });
 });
 
+// Импорт
 app.post("/api/import", upload.single("file"), async (req, res) => {
   try {
     const { masterKey } = req.body;
     if (masterKey !== MASTER_KEY)
-      return res.status(403).json({ error: "Нет доступа" });
+      return res.status(403).json({ error: "Нет доступа (неверный мастер-ключ)" });
 
     if (!req.file) return res.status(400).json({ error: "Файл не загружен" });
 
-    const content = req.file.buffer.toString("utf8");
     let json;
     try {
-      json = JSON.parse(content);
+      json = JSON.parse(req.file.buffer.toString("utf8"));
     } catch {
-      return res.status(400).json({ error: "Ошибка парсинга JSON" });
+      return res.status(400).json({ error: "Ошибка разбора JSON — проверь формат файла" });
     }
 
+    // поддерживаем оба варианта: {items:[...]} или просто [...]
     const items = Array.isArray(json) ? json : json.items;
     if (!Array.isArray(items))
-      return res.status(400).json({ error: "Неверный формат файла" });
+      return res.status(400).json({ error: "Неверный формат файла. Ожидается массив объектов или { items: [...] }" });
 
+    let added = 0;
     for (const row of items) {
+      if (!row.id) continue;
       await pool.query(
         "INSERT INTO ids (id, added_by, note, created_at) VALUES ($1,$2,$3,$4) ON CONFLICT (id) DO NOTHING",
-        [row.id, row.added_by, row.note || "", row.created_at || new Date()]
+        [row.id, row.added_by || "Неизвестно", row.note || "", row.created_at || new Date()]
       );
+      added++;
     }
 
-    res.json({ success: true, count: items.length });
+    console.log(`📥 Импортировано ${added} записей`);
+    res.json({ success: true, count: added });
   } catch (err) {
     console.error("❌ Ошибка импорта:", err);
-    res.status(500).json({ error: "Ошибка на сервере" });
+    res.status(500).json({ error: "Ошибка на сервере при импорте" });
   }
 });
+
 
 // === ЗАПУСК ===
 app.listen(process.env.PORT || 10000, () =>

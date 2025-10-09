@@ -51,6 +51,7 @@ const findUserByKey = (key) => {
 
 // === ГЛАВНАЯ СТРАНИЦА ===
 app.get("/", async (req, res) => {
+  const data = await pool.query("SELECT * FROM ids ORDER BY created_at DESC");
   res.send(`
 <!DOCTYPE html>
 <html lang="ru">
@@ -60,35 +61,27 @@ app.get("/", async (req, res) => {
 <style>
   body { font-family: system-ui, sans-serif; background:#f8fafc; padding:20px; color:#111; }
   table { width:100%; border-collapse:collapse; background:white; box-shadow:0 1px 3px rgba(0,0,0,0.1); }
-  th, td { padding:6px 8px; border-bottom:1px solid #ddd; font-size:14px; }
+  th, td { padding:6px 8px; border-bottom:1px solid #ddd; }
   th { background:#e0f0ff; text-align:left; }
   tr:hover { background:#f1f5f9; }
-  input[type="text"], input[type="password"] { padding:6px; width:220px; margin:4px; }
+  input[type="text"] { padding:6px; width:250px; margin-bottom:10px; }
   button { margin:4px; padding:6px 10px; border:1px solid #ccc; border-radius:4px; cursor:pointer; }
   button:hover { background:#e5f0ff; }
-  textarea { width:100%; height:40px; font-size:12px; }
-  #topbar { margin-bottom:10px; background:#fff; padding:10px; border-radius:6px; box-shadow:0 1px 3px rgba(0,0,0,0.1); display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
-  #status.locked { color:#c00; }
-  #status.unlocked { color:green; }
-  #pagination { margin-top:10px; display:flex; justify-content:center; align-items:center; gap:10px; }
+  textarea { width:100%; height:40px; }
+  .note { font-size:12px; color:#444; }
 </style>
 </head>
 <body>
   <h2>🧩 ID Manager</h2>
-  <div id="topbar">
+  <div>
     <input id="filter" placeholder="Фильтр по ID или пользователю">
-    <input id="masterKey" type="password" placeholder="Мастер-ключ">
-    <button onclick="saveKey()">💾 Сохранить ключ</button>
-    <span id="status" class="locked">🔒 Ключ неактивен</span>
-    <input id="newId" placeholder="Добавить новый ID вручную">
-    <button onclick="addManual()">➕ Добавить ID</button>
     <button onclick="refresh()">🔄 Обновить</button>
     <button onclick="deleteSelected()">🗑️ Удалить выбранные</button>
     <button onclick="exportData()">📤 Экспорт</button>
     <button onclick="document.getElementById('importFile').click()">📥 Импорт</button>
     <input type="file" id="importFile" accept=".json" style="display:none">
+    <button id="clearBtn" style="background:#fee2e2;border-color:#fca5a5;">🔥 Очистить базу</button>
   </div>
-
   <table id="idTable">
     <thead>
       <tr>
@@ -102,33 +95,36 @@ app.get("/", async (req, res) => {
     <tbody></tbody>
   </table>
 
-  <div id="pagination">
-    <button onclick="prevPage()">⬅️</button>
-    <span id="pageInfo">Стр. 1 / 1</span>
-    <button onclick="nextPage()">➡️</button>
-  </div>
-
 <script>
 let selected = new Set();
-let MASTER_KEY = localStorage.getItem("master_key") || "";
-let page = 1;
-const PER_PAGE = 100;
-
-document.getElementById("masterKey").value = MASTER_KEY;
-updateStatus();
-
-function updateStatus() {
-  const s = document.getElementById("status");
-  if (MASTER_KEY) { s.textContent = "🟢 Ключ активен"; s.className = "unlocked"; }
-  else { s.textContent = "🔒 Ключ неактивен"; s.className = "locked"; }
-}
-function saveKey() {
-  MASTER_KEY = document.getElementById("masterKey").value.trim();
-  localStorage.setItem("master_key", MASTER_KEY);
-  updateStatus();
-}
+const MASTER_KEY = localStorage.getItem("master_key") || prompt("Введите мастер ключ (если есть, иначе просто Enter):");
+if (MASTER_KEY) localStorage.setItem("master_key", MASTER_KEY);
 
 document.getElementById("filter").addEventListener("input", render);
+document.getElementById("selectAll").addEventListener("change", e => {
+  const checked = e.target.checked;
+  document.querySelectorAll(".chk").forEach(chk => {
+    chk.checked = checked;
+    if (checked) selected.add(chk.dataset.id);
+    else selected.delete(chk.dataset.id);
+  });
+});
+
+document.getElementById("clearBtn").addEventListener("click", async () => {
+  if (!MASTER_KEY) return alert("Нет мастер-ключа!");
+  if (!confirm("⚠️ Удалить ВСЕ записи?")) return;
+  const res = await fetch("/api/clear-all", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ masterKey: MASTER_KEY })
+  });
+  if (res.ok) {
+    alert("✅ База очищена");
+    load();
+  } else {
+    alert("❌ Ошибка. Неверный мастер-ключ?");
+  }
+});
 
 async function load() {
   const res = await fetch("/api/list-full");
@@ -139,28 +135,21 @@ async function load() {
 function render() {
   const filter = document.getElementById("filter").value.toLowerCase();
   const tbody = document.querySelector("#idTable tbody");
-  const filtered = (window.items || []).filter(x =>
-    x.id.toLowerCase().includes(filter) || x.added_by.toLowerCase().includes(filter)
-  );
-  const totalPages = Math.ceil(filtered.length / PER_PAGE);
-  if (page > totalPages) page = totalPages || 1;
-  const start = (page - 1) * PER_PAGE;
-  const slice = filtered.slice(start, start + PER_PAGE);
   tbody.innerHTML = "";
-  slice.forEach(x => {
-    const tr = document.createElement("tr");
-    const checked = selected.has(x.id) ? "checked" : "";
-    tr.innerHTML =
-      '<td><input type="checkbox" class="chk" data-id="' + x.id + '" ' + checked + '></td>' +
-      '<td>' + x.id + '</td>' +
-      '<td>' + x.added_by + '</td>' +
-      '<td>' + new Date(x.created_at).toLocaleString() + '</td>' +
-      '<td><textarea data-id="' + x.id + '">' + (x.note || "") + '</textarea></td>';
-    tbody.appendChild(tr);
-  });
-
-  document.getElementById("pageInfo").textContent = "Стр. " + page + " / " + totalPages;
-
+  (window.items||[])
+    .filter(x => x.id.toLowerCase().includes(filter) || x.added_by.toLowerCase().includes(filter))
+    .forEach(x => {
+      const tr = document.createElement("tr");
+      const checked = selected.has(x.id) ? "checked" : "";
+      tr.innerHTML = \`
+        <td><input type="checkbox" class="chk" data-id="\${x.id}" \${checked}></td>
+        <td>\${x.id}</td>
+        <td>\${x.added_by}</td>
+        <td>\${new Date(x.created_at).toLocaleString()}</td>
+        <td><textarea data-id="\${x.id}">\${x.note || ""}</textarea></td>
+      \`;
+      tbody.appendChild(tr);
+    });
   document.querySelectorAll(".chk").forEach(c =>
     c.addEventListener("change", e => {
       const id = e.target.dataset.id;
@@ -168,54 +157,25 @@ function render() {
       else selected.delete(id);
     })
   );
-
-  document.getElementById("selectAll").checked = slice.every(x => selected.has(x.id));
-  document.getElementById("selectAll").onclick = () => {
-    const all = document.getElementById("selectAll").checked;
-    slice.forEach(x => { if (all) selected.add(x.id); else selected.delete(x.id); });
-    render();
-  };
-
   document.querySelectorAll("textarea").forEach(a =>
     a.addEventListener("change", async e => {
       const id = e.target.dataset.id;
       const note = e.target.value;
       await fetch("/api/note", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, note, masterKey: MASTER_KEY })
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({ id, note, masterKey: MASTER_KEY })
       });
     })
   );
-}
-function prevPage() { if (page > 1) { page--; render(); } }
-function nextPage() {
-  const filter = document.getElementById("filter").value.toLowerCase();
-  const total = (window.items || []).filter(x =>
-    x.id.toLowerCase().includes(filter) || x.added_by.toLowerCase().includes(filter)
-  ).length;
-  const totalPages = Math.ceil(total / PER_PAGE);
-  if (page < totalPages) { page++; render(); }
-}
-
-async function addManual() {
-  const id = document.getElementById("newId").value.trim();
-  if (!id) return alert("Введите ID");
-  const res = await fetch("/api/add-manual", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id, masterKey: MASTER_KEY })
-  });
-  if (res.ok) { alert("✅ ID добавлен!"); document.getElementById("newId").value = ""; load(); }
-  else alert("❌ Ошибка");
 }
 
 async function deleteSelected() {
   if (!confirm("Удалить выбранные?")) return;
   await fetch("/api/delete-multiple", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ids: [...selected], masterKey: MASTER_KEY })
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({ ids:[...selected], masterKey: MASTER_KEY })
   });
   selected.clear();
   load();
@@ -233,13 +193,10 @@ async function exportData() {
 document.getElementById("importFile").addEventListener("change", async e => {
   const file = e.target.files[0];
   if (!file) return;
-  if (!MASTER_KEY) return alert("⚠️ Введите мастер-ключ!");
   const formData = new FormData();
   formData.append("file", file);
   formData.append("masterKey", MASTER_KEY);
-  const res = await fetch("/api/import", { method: "POST", body: formData });
-  if (res.ok) alert("✅ Импорт выполнен!");
-  else alert("❌ Ошибка импорта");
+  await fetch("/api/import", { method:"POST", body:formData });
   load();
 });
 
@@ -252,7 +209,14 @@ load();
 `);
 });
 
-// === API ===
+// === API: Очистка базы ===
+app.post("/api/clear-all", async (req, res) => {
+  const { masterKey } = req.body;
+  if (masterKey !== MASTER_KEY) return res.status(403).json({ error: "Нет доступа" });
+  await pool.query("DELETE FROM ids");
+  res.json({ success: true });
+});
+
 app.get("/api/list-full", async (req, res) => {
   const q = await pool.query("SELECT * FROM ids ORDER BY created_at DESC");
   res.json({ items: q.rows });

@@ -51,7 +51,6 @@ const findUserByKey = (key) => {
 
 // === ГЛАВНАЯ СТРАНИЦА ===
 app.get("/", async (req, res) => {
-  const data = await pool.query("SELECT * FROM ids ORDER BY created_at DESC");
   res.send(`
 <!DOCTYPE html>
 <html lang="ru">
@@ -59,7 +58,7 @@ app.get("/", async (req, res) => {
 <meta charset="UTF-8" />
 <title>ID Manager</title>
 <style>
-  body { font-family: system-ui, sans-serif; background:#f8fafc; padding:20px; color:#111; }
+  body { font-family: system-ui, sans-serif; background:#f8fafc; padding:20px; color:#111; position:relative; }
   table { width:100%; border-collapse:collapse; background:white; box-shadow:0 1px 3px rgba(0,0,0,0.1); }
   th, td { padding:6px 8px; border-bottom:1px solid #ddd; }
   th { background:#e0f0ff; text-align:left; }
@@ -68,10 +67,32 @@ app.get("/", async (req, res) => {
   button { margin:4px; padding:6px 10px; border:1px solid #ccc; border-radius:4px; cursor:pointer; }
   button:hover { background:#e5f0ff; }
   textarea { width:100%; height:40px; }
-  .note { font-size:12px; color:#444; }
+  .pagination { margin-top:10px; }
+  .pagination button { padding:4px 8px; margin:2px; }
+  #masterKeyBox {
+    position:absolute;
+    top:10px;
+    right:10px;
+    font-size:12px;
+    color:#666;
+    background:#fff;
+    border:1px solid #ddd;
+    border-radius:6px;
+    padding:6px;
+    box-shadow:0 1px 3px rgba(0,0,0,0.05);
+  }
+  #masterKeyBox input {
+    width:120px;
+    font-size:12px;
+    padding:3px 5px;
+  }
 </style>
 </head>
 <body>
+  <div id="masterKeyBox">
+    🔑 <input id="masterKeyInput" type="password" placeholder="Мастер-ключ">
+  </div>
+
   <h2>🧩 ID Manager</h2>
   <div>
     <input id="filter" placeholder="Фильтр по ID или пользователю">
@@ -95,12 +116,25 @@ app.get("/", async (req, res) => {
     <tbody></tbody>
   </table>
 
+  <div class="pagination" id="pagination"></div>
+
 <script>
 let selected = new Set();
-const MASTER_KEY = localStorage.getItem("master_key") || prompt("Введите мастер ключ (если есть, иначе просто Enter):");
-if (MASTER_KEY) localStorage.setItem("master_key", MASTER_KEY);
+let items = [];
+let currentPage = 1;
+const perPage = 50;
 
-document.getElementById("filter").addEventListener("input", render);
+let MASTER_KEY = localStorage.getItem("master_key") || "";
+document.getElementById("masterKeyInput").value = MASTER_KEY;
+
+// при изменении ключа — сохраняем в localStorage
+document.getElementById("masterKeyInput").addEventListener("change", e => {
+  MASTER_KEY = e.target.value.trim();
+  localStorage.setItem("master_key", MASTER_KEY);
+  console.log("🔑 Мастер-ключ обновлён");
+});
+
+document.getElementById("filter").addEventListener("input", () => { currentPage = 1; render(); });
 document.getElementById("selectAll").addEventListener("change", e => {
   const checked = e.target.checked;
   document.querySelectorAll(".chk").forEach(chk => {
@@ -111,7 +145,7 @@ document.getElementById("selectAll").addEventListener("change", e => {
 });
 
 document.getElementById("clearBtn").addEventListener("click", async () => {
-  if (!MASTER_KEY) return alert("Нет мастер-ключа!");
+  if (!MASTER_KEY) return alert("Введите мастер-ключ!");
   if (!confirm("⚠️ Удалить ВСЕ записи?")) return;
   const res = await fetch("/api/clear-all", {
     method: "POST",
@@ -129,27 +163,47 @@ document.getElementById("clearBtn").addEventListener("click", async () => {
 async function load() {
   const res = await fetch("/api/list-full");
   const data = await res.json();
-  window.items = data.items;
+  items = data.items;
   render();
 }
+
 function render() {
   const filter = document.getElementById("filter").value.toLowerCase();
   const tbody = document.querySelector("#idTable tbody");
+  const filtered = items.filter(x =>
+    x.id.toLowerCase().includes(filter) || x.added_by.toLowerCase().includes(filter)
+  );
+
+  const totalPages = Math.ceil(filtered.length / perPage);
+  const start = (currentPage - 1) * perPage;
+  const pageItems = filtered.slice(start, start + perPage);
+
   tbody.innerHTML = "";
-  (window.items||[])
-    .filter(x => x.id.toLowerCase().includes(filter) || x.added_by.toLowerCase().includes(filter))
-    .forEach(x => {
-      const tr = document.createElement("tr");
-      const checked = selected.has(x.id) ? "checked" : "";
-      tr.innerHTML = \`
-        <td><input type="checkbox" class="chk" data-id="\${x.id}" \${checked}></td>
-        <td>\${x.id}</td>
-        <td>\${x.added_by}</td>
-        <td>\${new Date(x.created_at).toLocaleString()}</td>
-        <td><textarea data-id="\${x.id}">\${x.note || ""}</textarea></td>
-      \`;
-      tbody.appendChild(tr);
-    });
+  pageItems.forEach(x => {
+    const tr = document.createElement("tr");
+    const checked = selected.has(x.id) ? "checked" : "";
+    tr.innerHTML = \`
+      <td><input type="checkbox" class="chk" data-id="\${x.id}" \${checked}></td>
+      <td>\${x.id}</td>
+      <td>\${x.added_by}</td>
+      <td>\${new Date(x.created_at).toLocaleString()}</td>
+      <td><textarea data-id="\${x.id}">\${x.note || ""}</textarea></td>
+    \`;
+    tbody.appendChild(tr);
+  });
+
+  // пагинация
+  const pagDiv = document.getElementById("pagination");
+  pagDiv.innerHTML = "";
+  for (let i = 1; i <= totalPages; i++) {
+    const btn = document.createElement("button");
+    btn.textContent = i;
+    if (i === currentPage) btn.style.fontWeight = "bold";
+    btn.addEventListener("click", () => { currentPage = i; render(); });
+    pagDiv.appendChild(btn);
+  }
+
+  // чекбоксы и заметки
   document.querySelectorAll(".chk").forEach(c =>
     c.addEventListener("change", e => {
       const id = e.target.dataset.id;
@@ -157,6 +211,7 @@ function render() {
       else selected.delete(id);
     })
   );
+
   document.querySelectorAll("textarea").forEach(a =>
     a.addEventListener("change", async e => {
       const id = e.target.dataset.id;
@@ -201,7 +256,7 @@ document.getElementById("importFile").addEventListener("change", async e => {
 });
 
 function refresh(){ load(); }
-setInterval(load, 2000);
+setInterval(load, 4000);
 load();
 </script>
 </body>

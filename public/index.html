@@ -17,7 +17,7 @@
   tr:hover { background:#f1f5f9; }
   textarea { width:100%; height:36px; font-size:12px; }
   #settings { margin-left:auto; display:flex; gap:8px; align-items:center; }
-  #settings input { width:150px; }
+  #settings input { width:140px; }
   .note { font-size:12px; color:#444; }
   .small { font-size:12px; color:#666; }
   .pagination { text-align:center; margin-top:10px; }
@@ -37,11 +37,14 @@
     </div>
 
     <div id="settings">
-      <label class="small">Минимум дубликатов:</label>
+      <label class="small">Мин. дубликатов:</label>
       <input id="minDuplicates" type="number" min="1" value="2">
+      <label><input id="useMinDuplicates" type="checkbox" checked> использовать</label>
       <label class="small">С даты (вкл.):</label>
       <input id="minDate" type="date" value="2025-09-22">
-      <button id="saveSettingsBtn">💾 Сохранить настройки</button>
+      <label><input id="useMinDate" type="checkbox" checked> использовать</label>
+      <button id="saveSettingsBtn">💾 Сохранить</button>
+      <button id="clearDbBtn" style="background:#ffdede">🔥 Очистить базу</button>
     </div>
   </div>
 
@@ -75,7 +78,10 @@ let isSearching = false;
 
 const MIN_DUP_INPUT = document.getElementById("minDuplicates");
 const MIN_DATE_INPUT = document.getElementById("minDate");
+const USE_MIN_DUP = document.getElementById("useMinDuplicates");
+const USE_MIN_DATE = document.getElementById("useMinDate");
 const SAVE_BTN = document.getElementById("saveSettingsBtn");
+const CLEAR_BTN = document.getElementById("clearDbBtn");
 
 async function loadSettingsToUI() {
   try {
@@ -83,6 +89,8 @@ async function loadSettingsToUI() {
     const s = await res.json();
     MIN_DUP_INPUT.value = s.minDuplicates || 2;
     MIN_DATE_INPUT.value = s.minDate || "2025-09-22";
+    USE_MIN_DUP.checked = (s.useMinDuplicates === undefined) ? true : !!s.useMinDuplicates;
+    USE_MIN_DATE.checked = (s.useMinDate === undefined) ? true : !!s.useMinDate;
   } catch (e) {
     console.warn("Не удалось загрузить настройки", e);
   }
@@ -91,12 +99,14 @@ async function loadSettingsToUI() {
 SAVE_BTN.addEventListener("click", async () => {
   const minDuplicates = Number(MIN_DUP_INPUT.value || 2);
   const minDate = MIN_DATE_INPUT.value || "2025-09-22";
+  const useMinDuplicates = USE_MIN_DUP.checked;
+  const useMinDate = USE_MIN_DATE.checked;
   const masterKey = localStorage.getItem("master_key") || prompt("Введите мастер ключ для сохранения настроек:");
   if (!masterKey) return alert("Мастер-ключ обязателен");
   const res = await fetch("/api/settings", {
     method: "POST",
     headers: {"Content-Type":"application/json"},
-    body: JSON.stringify({ minDuplicates, minDate, masterKey })
+    body: JSON.stringify({ minDuplicates, minDate, useMinDuplicates, useMinDate, masterKey })
   });
   if (res.ok) {
     alert("✅ Настройки сохранены");
@@ -168,7 +178,6 @@ function render() {
     });
   }));
 
-  // пагинация
   const pag = document.getElementById("pagination");
   if (isSearching) {
     pag.innerHTML = `<span>🔎 Найдено ${items.length} записей</span>`;
@@ -186,7 +195,6 @@ async function deleteSelected() {
   if (!confirm("Удалить выбранные?")) return;
   const masterKey = localStorage.getItem("master_key") || prompt("Введите мастер-ключ:");
   if (!masterKey) return alert("Нужен мастер-ключ");
-  // используем id_pk (если они есть) иначе id strings
   const arr = [...selected];
   await fetch("/api/delete-multiple", {
     method:"POST",
@@ -222,16 +230,33 @@ async function addManual() {
   const id = document.getElementById("newId").value.trim() || prompt("Введите ID:");
   if (!id) return;
   const added_by = document.getElementById("newBy").value.trim() || "manual";
-  // добавление через add-id (вставит новую запись)
   await fetch("/api/add-id", {
     method: "POST",
     headers: {"Content-Type":"application/json"},
-    body: JSON.stringify({ id, apiKey: added_by })
+    body:JSON.stringify({ id, apiKey: added_by })
   });
   document.getElementById("newId").value = "";
   document.getElementById("newBy").value = "";
   load(1);
 }
+
+CLEAR_BTN.addEventListener("click", async () => {
+  if (!confirm("Вы уверены, что хотите очистить базу?")) return;
+  const masterKey = prompt("Введите мастер-ключ для очистки базы:");
+  if (!masterKey) return alert("Нужен мастер-ключ");
+  const res = await fetch("/api/clear", {
+    method: "POST",
+    headers: {"Content-Type":"application/json"},
+    body: JSON.stringify({ masterKey })
+  });
+  const j = await res.json().catch(()=>({}));
+  if (j.success) {
+    alert("База очищена");
+    load(1);
+  } else {
+    alert("Ошибка: " + (j.error || "Неизвестно"));
+  }
+});
 
 function refresh() { load(currentPage); }
 

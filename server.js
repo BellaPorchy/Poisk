@@ -288,6 +288,30 @@ app.post("/api/import", upload.single("file"), async (req, res) => {
   }
 });
 
+// Получить все записи по конкретному ID (для content.js)
+app.get("/api/get-id/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    if (!id) {
+      return res.status(400).json({ error: "ID не указан" });
+    }
+
+    const q = await pool.query(
+      `SELECT id, added_by, note, created_at
+       FROM ${TABLE}
+       WHERE id = $1
+       ORDER BY created_at DESC`,
+      [String(id)]
+    );
+
+    res.json(q.rows);
+  } catch (err) {
+    console.error("Ошибка /api/get-id/:id:", err);
+    res.status(500).json({ error: "Ошибка сервера" });
+  }
+});
+
+
 // health & ping
 app.get("/api/ping", (req, res) => res.json({ status: "ok", time: new Date().toISOString() }));
 

@@ -85,6 +85,11 @@ app.get("/api/search", async (req, res) => {
   res.json({ items: q.rows });
 });
 
+// === API: Проверка доступности ===
+app.get("/api/ping", (req, res) => {
+  res.json({ status: "ok", time: new Date().toISOString() });
+});
+
 // === Добавить ID ===
 app.post("/api/add-id", async (req, res) => {
   const { id, apiKey } = req.body;
